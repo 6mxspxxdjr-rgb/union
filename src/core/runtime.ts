@@ -98,7 +98,7 @@ export class UnionRuntime {
         Boolean(nextState.lastAssistant)
 
       const completedWithoutStreaming =
-        Boolean(previousState) &&
+        previousState !== undefined &&
         !previousState.generating &&
         !nextState.generating &&
         previousState.lastAssistant !== nextState.lastAssistant &&
