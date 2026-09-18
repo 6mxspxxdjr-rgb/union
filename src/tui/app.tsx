@@ -69,7 +69,11 @@ export function App(props: { runtime: UnionRuntime }) {
   let chatInput: InputRenderable | null = null
 
   const offEvent = props.runtime.events.on(() => setTick((v) => v + 1))
+  const offThread = props.runtime.onThreadUpdate(() => setTick((v) => v + 1))
   const clock = setInterval(() => setTick((v) => v + 1), 15_000)
+
+  // Push events are the primary response path. This slow poll is only a
+  // resilience fallback if ChatGPT changes DOM behavior and a mutation is missed.
   const chatPoll = setInterval(() => {
     if (lens() !== "chat") return
     const endpoint = chatEndpoint()
@@ -77,10 +81,11 @@ export function App(props: { runtime: UnionRuntime }) {
     void props.runtime.syncThread(endpoint)
       .then(() => setTick((v) => v + 1))
       .catch(() => {})
-  }, 1200)
+  }, 5000)
 
   onCleanup(() => {
     offEvent()
+    offThread()
     clearInterval(clock)
     clearInterval(chatPoll)
   })
@@ -461,7 +466,7 @@ export function App(props: { runtime: UnionRuntime }) {
                 <span style={{ fg: "#8b949e" }}> · {chatEndpoint()?.title || "No endpoint"}</span>
               </text>
               <text fg="#6e7681">
-                {STATUS[chatEndpoint()?.status || "offline"] || "·"} {STATUS_LABEL[chatEndpoint()?.status || "offline"] || "OFFLINE"} · synced from the live browser session
+                {STATUS[chatEndpoint()?.status || "offline"] || "·"} {STATUS_LABEL[chatEndpoint()?.status || "offline"] || "OFFLINE"} · live browser push
               </text>
               <text> </text>
 
