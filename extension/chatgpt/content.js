@@ -109,6 +109,39 @@
     void chrome.runtime.sendMessage({ type: "endpoint.upsert", endpoint: endpoint() }).catch(() => {})
   }
 
+  function threadSnapshot() {
+    return {
+      title: title(),
+      url: location.href,
+      generating: isGenerating(),
+      messages: threadMessages()
+    }
+  }
+
+  let lastThreadSignature = ""
+  let threadTimer
+
+  function scheduleThreadUpdate(delay = 180) {
+    clearTimeout(threadTimer)
+    threadTimer = setTimeout(() => {
+      const snapshot = threadSnapshot()
+      const last = snapshot.messages.at(-1)
+      const previous = snapshot.messages.at(-2)
+      const signature = [
+        snapshot.generating ? "1" : "0",
+        snapshot.messages.length,
+        previous?.role || "",
+        previous?.content || "",
+        last?.role || "",
+        last?.content || ""
+      ].join("\u001f")
+
+      if (signature === lastThreadSignature) return
+      lastThreadSignature = signature
+      void chrome.runtime.sendMessage({ type: "thread.updated", snapshot }).catch(() => {})
+    }, delay)
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "union.request") return
 
@@ -117,16 +150,14 @@
         return { title: title(), content: latestAssistant(), url: location.href }
       }
       if (message.action === "read_thread") {
-        return {
-          title: title(),
-          url: location.href,
-          generating: isGenerating(),
-          messages: threadMessages()
-        }
+        return threadSnapshot()
       }
       if (message.action === "inject") {
         await injectText(String(message.payload?.content || ""))
-        if (message.payload?.submit) await submit()
+        if (message.payload?.submit) {
+          await submit()
+          scheduleThreadUpdate(40)
+        }
         return { ok: true }
       }
       if (message.action === "inspect") return endpoint()
@@ -139,5 +170,19 @@
   })
 
   announce()
-  setInterval(announce, 2000)
+  scheduleThreadUpdate(0)
+
+  const observer = new MutationObserver(() => scheduleThreadUpdate())
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    characterData: true
+  })
+
+  // Status/title fallback in case ChatGPT changes DOM structures without
+  // producing a message mutation that matters to Union.
+  setInterval(() => {
+    announce()
+    scheduleThreadUpdate(0)
+  }, 2000)
 })()
