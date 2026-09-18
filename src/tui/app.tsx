@@ -1,9 +1,10 @@
+import type { InputRenderable } from "@opentui/core"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
-import { useKeyboard, useRenderer } from "@opentui/solid"
+import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
 import type { UnionRuntime } from "../core/runtime"
 import type { Endpoint, FileRecord } from "../core/types"
 
-type Lens = "subjects" | "files" | "agents" | "activity"
+type Lens = "subjects" | "files" | "agents" | "activity" | "chat"
 type Focus = "subjects" | "files" | "agents"
 
 const STATUS: Record<string, string> = {
@@ -59,17 +60,33 @@ export function App(props: { runtime: UnionRuntime }) {
   const [subjectIndex, setSubjectIndex] = createSignal(0)
   const [fileIndex, setFileIndex] = createSignal(0)
   const [agentIndex, setAgentIndex] = createSignal(0)
+  const [chatEndpointId, setChatEndpointId] = createSignal<string>()
   const [notice, setNotice] = createSignal("ready · AI cockpit online")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   let userPickedSubject = false
+  let chatInput: InputRenderable | null = null
 
   const offEvent = props.runtime.events.on(() => setTick((v) => v + 1))
   const clock = setInterval(() => setTick((v) => v + 1), 15_000)
+  const chatPoll = setInterval(() => {
+    if (lens() !== "chat") return
+    const endpoint = chatEndpoint()
+    if (!endpoint) return
+    void props.runtime.syncThread(endpoint)
+      .then(() => setTick((v) => v + 1))
+      .catch(() => {})
+  }, 1200)
+
   onCleanup(() => {
     offEvent()
     clearInterval(clock)
+    clearInterval(chatPoll)
+  })
+
+  usePaste((event) => {
+    if (lens() === "chat") chatInput?.handlePaste(event)
   })
 
   const subjects = createMemo(() => {
@@ -84,6 +101,11 @@ export function App(props: { runtime: UnionRuntime }) {
     const union = list.findIndex((item) => item.title === "Union")
     const target = active >= 0 ? active : union >= 0 ? union : 0
     if (target !== subjectIndex()) setSubjectIndex(target)
+  })
+
+  createEffect(() => {
+    if (lens() !== "chat") return
+    setTimeout(() => chatInput?.focus(), 0)
   })
 
   const selectedSubject = createMemo(() =>
@@ -118,6 +140,16 @@ export function App(props: { runtime: UnionRuntime }) {
   const selectedAgent = createMemo<Endpoint | undefined>(() =>
     allAgents()[Math.min(agentIndex(), Math.max(0, allAgents().length - 1))]
   )
+
+  const chatEndpoint = createMemo<Endpoint | undefined>(() =>
+    allAgents().find((endpoint) => endpoint.id === chatEndpointId()) || selectedAgent()
+  )
+
+  const chatMessages = createMemo(() => {
+    tick()
+    const endpoint = chatEndpoint()
+    return endpoint ? props.runtime.db.messagesForEndpoint(endpoint.id, 20) : []
+  })
 
   const context = createMemo(() =>
     props.runtime.icm.compile({
@@ -160,6 +192,45 @@ export function App(props: { runtime: UnionRuntime }) {
       return
     }
     setFocus((current) => current === "agents" ? "subjects" : "agents")
+  }
+
+  async function openChat() {
+    const endpoint = selectedAgent()
+    if (!endpoint) return setNotice("select an AI endpoint first")
+    setChatEndpointId(endpoint.id)
+    setLens("chat")
+    setFocus("agents")
+    setNotice(`chat · ${endpoint.title}`)
+    await props.runtime.syncThread(endpoint).catch(() => {})
+    setTick((v) => v + 1)
+  }
+
+  function closeChat() {
+    chatInput?.blur()
+    setLens("subjects")
+    setFocus("agents")
+    setNotice("returned to cockpit")
+  }
+
+  async function submitChat(value: string) {
+    const endpoint = chatEndpoint()
+    const text = value.trim()
+    if (!endpoint || !text || busy()) return
+
+    setBusy(true)
+    setNotice(`sending → ${endpoint.title}`)
+    try {
+      await props.runtime.send(endpoint, text, true)
+      if (chatInput) chatInput.value = ""
+      await props.runtime.syncThread(endpoint).catch(() => {})
+      setTick((v) => v + 1)
+      setNotice(`sent · waiting for ${endpoint.system}`)
+    } catch (error) {
+      setNotice(String(error))
+    } finally {
+      setBusy(false)
+      setTimeout(() => chatInput?.focus(), 0)
+    }
   }
 
   async function yank() {
@@ -213,22 +284,37 @@ export function App(props: { runtime: UnionRuntime }) {
   }
 
   useKeyboard((key) => {
-    if (key.ctrl && key.name === "c") renderer.destroy()
-    else if (key.name === "q") renderer.destroy()
+    if (key.ctrl && key.name === "c") {
+      renderer.destroy()
+      return
+    }
+
+    if (lens() === "chat") {
+      if (key.name === "escape") closeChat()
+      return
+    }
+
+    if (key.name === "q") renderer.destroy()
     else if (key.name === "1") { setLens("subjects"); setFocus("subjects") }
     else if (key.name === "2") { setLens("files"); setFocus("files") }
     else if (key.name === "3") { setLens("agents"); setFocus("agents") }
     else if (key.name === "4") { setLens("activity"); setFocus("subjects") }
     else if (key.name === "tab") cycleFocus()
+    else if (key.name === "return" && focus() === "agents") void openChat()
     else if (key.name === "j" || key.name === "down") move(1)
     else if (key.name === "k" || key.name === "up") move(-1)
     else if (key.name === "r") void props.runtime.rescan().then((n) => {
       setNotice(n ? `indexed ${n} files` : "scan already running")
       setTick((v) => v + 1)
     })
-    else if (key.name === "o" && selectedFile()) {
-      props.runtime.openFile(selectedFile()!)
-      setNotice(`opened ${selectedFile()!.title}`)
+    else if (key.name === "o") {
+      if (focus() === "agents" && selectedAgent()?.url) {
+        props.runtime.openEndpoint(selectedAgent()!)
+        setNotice(`opened ${selectedAgent()!.title} in browser`)
+      } else if (lens() === "files" && selectedFile()) {
+        props.runtime.revealFile(selectedFile()!)
+        setNotice(`revealed ${selectedFile()!.title} in Finder`)
+      }
     }
     else if (key.name === "y") void yank()
     else if (key.name === "c") captureContext()
@@ -254,25 +340,27 @@ export function App(props: { runtime: UnionRuntime }) {
       </box>
 
       <box flexGrow={1} flexDirection="row">
-        <box
-          width={24}
-          flexDirection="column"
-          padding={1}
-          border={["right"]}
-          borderColor={focus() === "subjects" ? "#58a6ff" : "#30363d"}
-        >
-          <text fg="#8b949e"><b>SUBJECTS</b></text>
-          <text fg="#6e7681">{subjects().length} indexed</text>
-          <text> </text>
-          <For each={subjects().slice(0, 26)}>{(subject, i) => (
-            <text fg={i() === subjectIndex() ? "#f0f6fc" : "#8b949e"}>
-              {i() === subjectIndex() ? "›" : " "} {subject.title.slice(0, 15).padEnd(15)}
-              <span style={{ fg: subject.active ? "#58a6ff" : "#484f58" }}>
-                {subject.active ? ` ●${subject.active}` : ` ${subject.files}`}
-              </span>
-            </text>
-          )}</For>
-        </box>
+        <Show when={lens() !== "chat"}>
+          <box
+            width={24}
+            flexDirection="column"
+            padding={1}
+            border={["right"]}
+            borderColor={focus() === "subjects" ? "#58a6ff" : "#30363d"}
+          >
+            <text fg="#8b949e"><b>SUBJECTS</b></text>
+            <text fg="#6e7681">{subjects().length} indexed</text>
+            <text> </text>
+            <For each={subjects().slice(0, 26)}>{(subject, i) => (
+              <text fg={i() === subjectIndex() ? "#f0f6fc" : "#8b949e"}>
+                {i() === subjectIndex() ? "›" : " "} {subject.title.slice(0, 15).padEnd(15)}
+                <span style={{ fg: subject.active ? "#58a6ff" : "#484f58" }}>
+                  {subject.active ? ` ●${subject.active}` : ` ${subject.files}`}
+                </span>
+              </text>
+            )}</For>
+          </box>
+        </Show>
 
         <box flexGrow={1} minWidth={48} flexDirection="column" padding={1} border={["right"]} borderColor="#30363d">
           <Show when={lens() === "subjects"}>
@@ -280,10 +368,7 @@ export function App(props: { runtime: UnionRuntime }) {
             <text fg="#6e7681">ACTIVE WORK</text>
             <text> </text>
 
-            <Show
-              when={subjectAgents().length}
-              fallback={<text fg="#6e7681">No live AI work in this subject yet.</text>}
-            >
+            <Show when={subjectAgents().length} fallback={<text fg="#6e7681">No live AI work in this subject yet.</text>}>
               <For each={subjectAgents().slice(0, 6)}>{(agent) => (
                 <box flexDirection="column" marginBottom={1}>
                   <text fg="#c9d1d9">
@@ -318,7 +403,7 @@ export function App(props: { runtime: UnionRuntime }) {
 
           <Show when={lens() === "files"}>
             <text fg="#f0f6fc"><b>FILES</b></text>
-            <text fg="#6e7681">{allFiles().length} in this workspace · raw physical lens</text>
+            <text fg="#6e7681">{allFiles().length} in this workspace · o reveals in Finder</text>
             <text> </text>
             <For each={files().slice(0, 16)}>{(file, i) => (
               <text fg={i() === fileIndex() ? "#f0f6fc" : "#8b949e"}>
@@ -335,6 +420,7 @@ export function App(props: { runtime: UnionRuntime }) {
 
           <Show when={lens() === "agents"}>
             <text fg="#f0f6fc"><b>AI SYSTEM DETAIL</b></text>
+            <text fg="#6e7681">Enter opens terminal chat · o opens browser</text>
             <text> </text>
             <Show when={selectedAgent()} fallback={<text fg="#6e7681">No AI endpoint selected.</text>}>
               {(agent) => (
@@ -347,10 +433,11 @@ export function App(props: { runtime: UnionRuntime }) {
                   <text fg="#8b949e">URL      {(agent().url || "").slice(0, 64)}</text>
                   <text> </text>
                   <text fg="#58a6ff"><b>ROUTING</b></text>
-                  <text fg="#8b949e">y   capture latest response</text>
-                  <text fg="#8b949e">p   inject current buffer</text>
-                  <text fg="#8b949e">⇧p  inject + submit</text>
-                  <text fg="#8b949e">c   compile selected subject context</text>
+                  <text fg="#8b949e">Enter  chat with this session</text>
+                  <text fg="#8b949e">y      capture latest response</text>
+                  <text fg="#8b949e">p      inject current buffer</text>
+                  <text fg="#8b949e">⇧p     inject + submit</text>
+                  <text fg="#8b949e">c      compile selected subject context</text>
                 </box>
               )}
             </Show>
@@ -366,6 +453,65 @@ export function App(props: { runtime: UnionRuntime }) {
               </text>
             )}</For>
           </Show>
+
+          <Show when={lens() === "chat"}>
+            <box flexDirection="column" flexGrow={1} minHeight={0}>
+              <text fg="#f0f6fc">
+                <b>CHAT</b> <span style={{ fg: "#58a6ff" }}>{chatEndpoint()?.system || "AI"}</span>
+                <span style={{ fg: "#8b949e" }}> · {chatEndpoint()?.title || "No endpoint"}</span>
+              </text>
+              <text fg="#6e7681">
+                {STATUS[chatEndpoint()?.status || "offline"] || "·"} {STATUS_LABEL[chatEndpoint()?.status || "offline"] || "OFFLINE"} · synced from the live browser session
+              </text>
+              <text> </text>
+
+              <scrollbox
+                flexGrow={1}
+                flexShrink={1}
+                stickyScroll={true}
+                stickyStart="bottom"
+                scrollbarOptions={{ visible: true }}
+                contentOptions={{ flexGrow: 1, gap: 1 }}
+              >
+                <Show when={chatMessages().length} fallback={<text fg="#6e7681">No messages synced yet.</text>}>
+                  <For each={chatMessages()}>{(message) => (
+                    <box
+                      flexDirection="column"
+                      paddingLeft={1}
+                      paddingRight={1}
+                      border={["left"]}
+                      borderColor={message.role === "user" ? "#3fb950" : "#58a6ff"}
+                    >
+                      <text fg={message.role === "user" ? "#3fb950" : "#58a6ff"}>
+                        <b>{message.role === "user" ? "YOU" : chatEndpoint()?.system?.toUpperCase() || "AI"}</b>
+                      </text>
+                      <text fg="#c9d1d9">{message.content}</text>
+                    </box>
+                  )}</For>
+                </Show>
+              </scrollbox>
+
+              <box
+                height={3}
+                marginTop={1}
+                paddingLeft={1}
+                paddingRight={1}
+                border
+                borderColor="#58a6ff"
+                alignItems="center"
+              >
+                <text fg="#58a6ff">› </text>
+                <input
+                  ref={(value) => (chatInput = value)}
+                  focused
+                  flexGrow={1}
+                  maxLength={8000}
+                  placeholder={busy() ? "sending…" : "Message this ChatGPT session…"}
+                  onSubmit={(value) => void submitChat(value)}
+                />
+              </box>
+            </box>
+          </Show>
         </box>
 
         <box
@@ -378,10 +524,7 @@ export function App(props: { runtime: UnionRuntime }) {
           <text fg="#6e7681">live endpoints across all subjects</text>
           <text> </text>
 
-          <Show
-            when={allAgents().length}
-            fallback={<text fg="#6e7681">No endpoints connected. Refresh an open ChatGPT tab.</text>}
-          >
+          <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open ChatGPT tab.</text>}>
             <For each={allAgents().slice(0, 12)}>{(agent, i) => (
               <box flexDirection="column" marginBottom={1}>
                 <text fg={i() === agentIndex() ? "#f0f6fc" : "#8b949e"}>
@@ -416,9 +559,16 @@ export function App(props: { runtime: UnionRuntime }) {
             <span style={{ fg: "#58a6ff" }}> · buffer ready</span>
           </Show>
         </text>
-        <text fg="#6e7681">
-          1 cockpit  2 files  3 systems  4 activity   tab focus   j/k move   y AI→buffer   c ICM→buffer   p inject   ⇧p submit   o open   r rescan   q quit
-        </text>
+        <Show
+          when={lens() === "chat"}
+          fallback={
+            <text fg="#6e7681">
+              1 cockpit  2 files  3 systems  4 activity   tab focus   j/k move   Enter chat   y AI→buffer   c ICM→buffer   p inject   ⇧p submit   o open   q quit
+            </text>
+          }
+        >
+          <text fg="#6e7681">Enter send · Esc cockpit · Ctrl+C quit · conversation stays in the live ChatGPT browser session</text>
+        </Show>
       </box>
     </box>
   )
