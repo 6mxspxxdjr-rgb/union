@@ -1,6 +1,12 @@
-import { id } from "../core/id"
+import { stableId } from "../core/id"
 import type { Capability, Endpoint, UnionAdapter, UnionMessage } from "../core/types"
 import type { BridgeServer } from "../services/bridge-server"
+
+type ThreadMessage = {
+  role: "user" | "assistant"
+  content: string
+  index: number
+}
 
 export class ChatGPTAdapter implements UnionAdapter {
   id = "chatgpt-browser"
@@ -14,16 +20,16 @@ export class ChatGPTAdapter implements UnionAdapter {
   }
 
   async read(endpointId: string): Promise<UnionMessage[]> {
-    const data = await this.bridge.request<{ content?: string; title?: string }>(endpointId, "read_latest")
-    if (!data?.content) return []
-    return [{
-      id: id("msg"),
+    const data = await this.bridge.request<{ messages?: ThreadMessage[] }>(endpointId, "read_thread")
+    const now = Date.now()
+    return (data?.messages ?? []).map((message) => ({
+      id: stableId("msg", `${endpointId}:${message.index}:${message.role}`),
       endpointId,
-      role: "assistant",
-      content: data.content,
-      createdAt: Date.now(),
-      metadata: { title: data.title },
-    }]
+      role: message.role,
+      content: message.content,
+      createdAt: now + message.index,
+      metadata: { threadIndex: message.index },
+    }))
   }
 
   async send(endpointId: string, content: string, submit = false) {
