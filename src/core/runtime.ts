@@ -14,6 +14,15 @@ import { UnionDatabase } from "../services/database"
 import { FileIndexer } from "../services/file-indexer"
 import { readPrefix } from "./fs"
 
+export type RoomTurn = {
+  index: number
+  agentId: string
+  system: string
+  title: string
+  content: string
+  createdAt: number
+}
+
 export class UnionRuntime {
   readonly db: UnionDatabase
   readonly events: UnionEvents
@@ -181,6 +190,117 @@ export class UnionRuntime {
       await new Promise((resolve) => setTimeout(resolve, 180))
       await this.syncThread(endpoint).catch(() => {})
     }
+  }
+
+  private latestAssistantContent(endpointId: string) {
+    const messages = this.db.messagesForEndpoint(endpointId, 40)
+    return [...messages].reverse().find((message) => message.role === "assistant")?.content.trim() ?? ""
+  }
+
+  async waitForAssistantReply(endpoint: Endpoint, previousContent: string, timeoutMs = 180_000) {
+    const deadline = Date.now() + timeoutMs
+    let candidate = ""
+    let stableSince = 0
+    let polls = 0
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 220))
+      polls += 1
+
+      // Browser push is primary. Periodic explicit reads are only a fallback.
+      if (polls % 18 === 0) await this.syncThread(endpoint).catch(() => {})
+
+      const latest = this.latestAssistantContent(endpoint.id)
+      if (!latest || latest === previousContent) continue
+
+      if (latest !== candidate) {
+        candidate = latest
+        stableSince = Date.now()
+      }
+
+      const current = this.db.listEndpoints().find((item) => item.id === endpoint.id)
+      const settled = current?.status !== "working" && Date.now() - stableSince >= 650
+      if (settled) return candidate
+    }
+
+    throw new Error(`Timed out waiting for ${endpoint.system} response`)
+  }
+
+  async runTwoAgentRoom(
+    task: string,
+    first: Endpoint,
+    second: Endpoint,
+    options: {
+      turns?: number
+      onTurn?: (turn: RoomTurn) => void
+    } = {},
+  ) {
+    const cleanTask = task.trim()
+    if (!cleanTask) throw new Error("Room task cannot be empty")
+    if (first.id === second.id) throw new Error("Room requires two different agents")
+
+    const turns = Math.max(2, Math.min(options.turns ?? 4, 12))
+    const transcript: RoomTurn[] = []
+    let partnerResponse = ""
+
+    for (let index = 0; index < turns; index += 1) {
+      const agent = index % 2 === 0 ? first : second
+      const partner = index % 2 === 0 ? second : first
+      const before = this.latestAssistantContent(agent.id)
+
+      const prompt = index === 0
+        ? [
+            "You are one of two AI agents collaborating inside a Union room.",
+            "",
+            "SHARED TASK:",
+            cleanTask,
+            "",
+            `Your partner is ${partner.system}. Work on the task now. Your response will be relayed verbatim to your partner.`,
+            "Move the work forward with concrete reasoning, useful output, questions, or a proposed solution. Do not merely describe the collaboration."
+          ].join("\n")
+        : [
+            "You are one of two AI agents collaborating inside a Union room.",
+            "",
+            "ORIGINAL SHARED TASK:",
+            cleanTask,
+            "",
+            `MESSAGE FROM ${partner.system}:`,
+            partnerResponse,
+            "",
+            `Continue the work as ${agent.system}. Critique, improve, answer, revise, or extend your partner's contribution.`,
+            "Your response will be relayed back to your partner, so make substantive progress rather than simply agreeing."
+          ].join("\n")
+
+      this.events.emit(
+        "system",
+        { action: "room.turn.started", turn: index + 1, system: agent.system, partner: partner.system },
+        { objectId: agent.id, subject: "Rooms" },
+      )
+
+      await this.send(agent, prompt, true)
+      const content = await this.waitForAssistantReply(agent, before)
+
+      const turn: RoomTurn = {
+        index: index + 1,
+        agentId: agent.id,
+        system: agent.system,
+        title: agent.title,
+        content,
+        createdAt: Date.now(),
+      }
+
+      transcript.push(turn)
+      partnerResponse = content
+      options.onTurn?.(turn)
+
+      this.events.emit(
+        "system",
+        { action: "room.turn.completed", turn: index + 1, system: agent.system, chars: content.length },
+        { objectId: agent.id, subject: "Rooms" },
+      )
+    }
+
+    return transcript
   }
 
   revealFile(file: FileRecord) {
