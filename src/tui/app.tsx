@@ -511,7 +511,7 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused
                   flexGrow={1}
                   maxLength={8000}
-                  placeholder={busy() ? "sending…" : "Message this ChatGPT session…"}
+                  placeholder={busy() ? "sending…" : `Message this ${chatEndpoint()?.system || "AI"} session…`}
                   onSubmit={(value) => void submitChat(value)}
                 />
               </box>
@@ -529,7 +529,7 @@ export function App(props: { runtime: UnionRuntime }) {
           <text fg="#6e7681">live endpoints across all subjects</text>
           <text> </text>
 
-          <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open ChatGPT tab.</text>}>
+          <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open supported AI tab.</text>}>
             <For each={allAgents().slice(0, 12)}>{(agent, i) => (
               <box flexDirection="column" marginBottom={1}>
                 <text fg={i() === agentIndex() ? "#f0f6fc" : "#8b949e"}>
@@ -572,7 +572,7 @@ export function App(props: { runtime: UnionRuntime }) {
             </text>
           }
         >
-          <text fg="#6e7681">Enter send · Esc cockpit · Ctrl+C quit · conversation stays in the live ChatGPT browser session</text>
+          <text fg="#6e7681">Enter send · Esc cockpit · Ctrl+C quit · conversation stays in the live browser session</text>
         </Show>
       </box>
     </box>
