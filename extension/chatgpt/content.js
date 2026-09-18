@@ -16,12 +16,32 @@
     )
   }
 
+  function messageText(node, role) {
+    const body =
+      role === "assistant"
+        ? node.querySelector(".markdown") || node
+        : node.querySelector(".whitespace-pre-wrap") ||
+          node.querySelector('[class*="whitespace-pre-wrap"]') ||
+          node
+    return (body.innerText || body.textContent || "").trim()
+  }
+
+  function threadMessages() {
+    return [...document.querySelectorAll("[data-message-author-role]")]
+      .map((node, index) => {
+        const role = node.getAttribute("data-message-author-role")
+        if (role !== "user" && role !== "assistant") return null
+        const content = messageText(node, role)
+        if (!content) return null
+        return { role, content, index }
+      })
+      .filter(Boolean)
+      .slice(-20)
+  }
+
   function latestAssistant() {
-    const messages = [...document.querySelectorAll('[data-message-author-role="assistant"]')]
-    const latest = messages.at(-1)
-    if (!latest) return ""
-    const markdown = latest.querySelector(".markdown") || latest
-    return (markdown.innerText || markdown.textContent || "").trim()
+    const messages = threadMessages().filter((message) => message.role === "assistant")
+    return messages.at(-1)?.content || ""
   }
 
   function composer() {
@@ -95,6 +115,14 @@
     ;(async () => {
       if (message.action === "read_latest") {
         return { title: title(), content: latestAssistant(), url: location.href }
+      }
+      if (message.action === "read_thread") {
+        return {
+          title: title(),
+          url: location.href,
+          generating: isGenerating(),
+          messages: threadMessages()
+        }
       }
       if (message.action === "inject") {
         await injectText(String(message.payload?.content || ""))
