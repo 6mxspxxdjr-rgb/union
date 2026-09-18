@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Union ChatGPT Bridge",
+  "version": "0.0.1",
+  "description": "Connect open ChatGPT conversations to the local Union terminal control plane.",
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:7331"
+  }
+}
