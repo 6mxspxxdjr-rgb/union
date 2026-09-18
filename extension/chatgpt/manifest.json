@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Union ChatGPT Bridge",
-  "version": "0.0.1",
-  "description": "Connect open ChatGPT conversations to the local Union terminal control plane.",
+  "name": "Union AI Browser Bridge",
+  "version": "0.0.2",
+  "description": "Connect open AI web conversations to the local Union terminal control plane.",
   "permissions": ["tabs"],
   "host_permissions": [
     "https://chatgpt.com/*",
+    "https://chat.deepseek.com/*",
     "http://127.0.0.1/*"
   ],
   "background": {
@@ -16,6 +17,11 @@
     {
       "matches": ["https://chatgpt.com/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["deepseek.js"],
       "run_at": "document_idle"
     }
   ],
