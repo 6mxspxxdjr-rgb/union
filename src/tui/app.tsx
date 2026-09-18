@@ -62,8 +62,9 @@ export function App(props: { runtime: UnionRuntime }) {
   const [agentIndex, setAgentIndex] = createSignal(0)
   const [chatEndpointId, setChatEndpointId] = createSignal<string>()
   const [roomTurns, setRoomTurns] = createSignal<RoomTurn[]>([])
+  const [roomTurnLimit, setRoomTurnLimit] = createSignal(4)
   const [roomRunning, setRoomRunning] = createSignal(false)
-  const [roomStatus, setRoomStatus] = createSignal("ready · 4 alternating turns")
+  const [roomStatus, setRoomStatus] = createSignal("ready")
   const [notice, setNotice] = createSignal("ready · AI cockpit online")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
@@ -261,27 +262,28 @@ export function App(props: { runtime: UnionRuntime }) {
       return
     }
 
+    const turnLimit = roomTurnLimit()
     setRoomTurns([])
     setRoomRunning(true)
-    setRoomStatus("turn 1/4 · ChatGPT working")
+    setRoomStatus(`turn 1/${turnLimit} · ChatGPT working`)
     setNotice("Room started · ChatGPT ↔ DeepSeek")
 
     try {
       if (roomInput) roomInput.value = ""
       await props.runtime.runTwoAgentRoom(task, chatgpt, deepseek, {
-        turns: 4,
+        turns: turnLimit,
         onTurn: (turn) => {
           setRoomTurns((current) => [...current, turn])
           const next = turn.index + 1
           setRoomStatus(
-            next <= 4
-              ? `turn ${next}/4 · ${next % 2 === 1 ? "ChatGPT" : "DeepSeek"} working`
-              : "completed · 4/4 turns",
+            next <= turnLimit
+              ? `turn ${next}/${turnLimit} · ${next % 2 === 1 ? "ChatGPT" : "DeepSeek"} working`
+              : `completed · ${turnLimit}/${turnLimit} turns`,
           )
           setTick((v) => v + 1)
         },
       })
-      setRoomStatus("completed · 4/4 turns")
+      setRoomStatus(`completed · ${turnLimit}/${turnLimit} turns`)
       setNotice("Room completed")
     } catch (error) {
       setRoomStatus(`failed · ${String(error)}`)
@@ -354,6 +356,20 @@ export function App(props: { runtime: UnionRuntime }) {
     }
 
     if (lens() === "room") {
+      if (!roomRunning() && (key.name === "[" || key.sequence === "[")) {
+        key.preventDefault()
+        key.stopPropagation()
+        setRoomTurnLimit((current) => Math.max(2, current - 1))
+        setRoomStatus("ready")
+        return
+      }
+      if (!roomRunning() && (key.name === "]" || key.sequence === "]")) {
+        key.preventDefault()
+        key.stopPropagation()
+        setRoomTurnLimit((current) => Math.min(12, current + 1))
+        setRoomStatus("ready")
+        return
+      }
       if (key.name === "escape" && !roomRunning()) {
         roomInput?.blur()
         setLens("subjects")
@@ -528,7 +544,7 @@ export function App(props: { runtime: UnionRuntime }) {
             <box flexDirection="column" flexGrow={1} minHeight={0}>
               <text fg="#f0f6fc"><b>ROOM 1</b> <span style={{ fg: "#8b949e" }}>two-agent relay</span></text>
               <text fg="#6e7681">
-                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  ↔  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · {roomStatus()}
+                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  ↔  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · turns {roomTurnLimit()} · [ / ] adjust · {roomStatus()}
               </text>
               <text> </text>
 
@@ -546,7 +562,7 @@ export function App(props: { runtime: UnionRuntime }) {
                     <box flexDirection="column">
                       <text fg="#8b949e">Type one shared task below.</text>
                       <text fg="#6e7681">ChatGPT starts. Union waits for the completed reply, sends it to DeepSeek, then relays DeepSeek back to ChatGPT.</text>
-                      <text fg="#6e7681">This proof-of-concept stops automatically after four agent responses.</text>
+                      <text fg="#6e7681">Turn limit: {roomTurnLimit()} responses. Press [ or ] to adjust between 2 and 12 before starting.</text>
                     </box>
                   }
                 >
