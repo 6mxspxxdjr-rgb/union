@@ -16,3 +16,5 @@ jobs:
       - run: bun run check
       - run: bun test
       - run: node --check extension/chatgpt/content.js
+      - run: node --check extension/chatgpt/deepseek.js
+      - run: node --check extension/chatgpt/background.js
