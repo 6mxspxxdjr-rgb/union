@@ -13,6 +13,16 @@ const DEFAULT_IGNORES = [
   "**/.git/**",
   "**/node_modules/**",
   "**/.next/**",
+  "**/.venv/**",
+  "**/venv/**",
+  "**/__pycache__/**",
+  "**/.pytest_cache/**",
+  "**/.mypy_cache/**",
+  "**/.ruff_cache/**",
+  "**/.turbo/**",
+  "**/target/**",
+  "**/coverage/**",
+  "**/.coverage/**",
   "**/dist/**",
   "**/build/**",
   "**/.cache/**",
@@ -122,7 +132,7 @@ export class FileIndexer {
   async watch() {
     if (this.watcher) return
     this.watcher = chokidar.watch(this.root, {
-      ignored: (path) => ["/.git/", "/node_modules/", "/.next/", "/dist/", "/build/", "/.cache/", "/Library/Caches/", "/Library/Application Support/", "/.Trash/", "/.npm/", "/.bun/"].some((part) => path.includes(part)),
+      ignored: (path) => ["/.git/", "/node_modules/", "/.next/", "/.venv/", "/venv/", "/__pycache__/", "/.pytest_cache/", "/.mypy_cache/", "/.ruff_cache/", "/.turbo/", "/target/", "/coverage/", "/dist/", "/build/", "/.cache/", "/Library/Caches/", "/Library/Application Support/", "/.Trash/", "/.npm/", "/.bun/"].some((part) => path.includes(part)),
       ignoreInitial: true,
       persistent: true,
       followSymlinks: false,
