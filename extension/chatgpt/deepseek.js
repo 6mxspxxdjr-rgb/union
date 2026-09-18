@@ -56,28 +56,73 @@
     return messages.at(-1) || null
   }
 
+  const GENERATING_GRACE_MS = 30_000
+  const STREAMING_IDLE_MS = 5_000
+  let lastGeneratingSeenAt = 0
+  let lastAssistantSig = null
+  let lastAssistantSigAt = 0
+
   function isGenerating() {
     const selectors = [
-      'div.ds-icon-button[role="button"]:has(svg rect)',
+      ".ds-icon-stop-circle",
+      ".ds-icon-stop",
+      'div[role="button"] svg path[d*="M3 3h10v10H3z"]',
+      'div[role="button"] svg path[d*="M6 6h12v12H6z"]',
+      'div[role="button"] svg path[d*="M2 4.88"]',
       'div[role="button"][aria-label*="Stop" i]',
-      '.ds-stop-button',
       'button[aria-label*="Stop" i]',
-      'button[data-testid*="stop" i]',
-      'div[class*="stop" i][role="button"]'
+      'button[data-testid*="stop" i]'
     ]
-    if (selectors.some((selector) => document.querySelector(selector))) return true
 
-    const latest = latestAssistantTurn()
-    if (latest?.querySelector?.(THINK_SELECTOR) && !textOf(finalAnswerNode(latest))) {
-      // DeepSeek has mounted reasoning but has not mounted a deliverable answer.
+    if (selectors.some((selector) => document.querySelector(selector))) {
+      lastGeneratingSeenAt = Date.now()
       return true
     }
 
-    return [...document.querySelectorAll('button,[role="button"]')].some((element) => {
-      const text = (element.textContent || "").trim()
-      const aria = element.getAttribute("aria-label") || ""
-      return /^(stop|停止|停止生成)$/i.test(text) || /stop/i.test(aria)
-    })
+    const latest = latestAssistantTurn()
+    if (!latest) return false
+
+    if (latest.querySelector(".ds-cursor") || latest.classList.contains("_streaming")) {
+      lastGeneratingSeenAt = Date.now()
+      return true
+    }
+
+    // Once DeepSeek mounts its action controls, the assistant turn is complete.
+    if (latest.querySelector(
+      'div[role="button"] svg, .ds-icon-copy, .ds-icon-regenerate, .ds-icon-share'
+    )) {
+      return false
+    }
+
+    const editor = composer()
+    const editorText = editor
+      ? ("value" in editor ? editor.value : editor.textContent || "")
+      : ""
+
+    // DeepSeek can hide the stop control while the composer contains text.
+    // Only trust the message-level fallback if generation was observed recently.
+    if (!String(editorText).trim() || Date.now() - lastGeneratingSeenAt > GENERATING_GRACE_MS) {
+      const answer = textOf(finalAnswerNode(latest))
+      if (latest.querySelector(THINK_SELECTOR) && !answer) return true
+      return false
+    }
+
+    const text = latest.textContent || ""
+    const sig = `${text.length}:${text.slice(-64)}`
+
+    if (lastAssistantSig === null) {
+      lastAssistantSig = sig
+      return false
+    }
+
+    if (sig !== lastAssistantSig) {
+      lastAssistantSig = sig
+      lastAssistantSigAt = Date.now()
+      lastGeneratingSeenAt = Date.now()
+      return true
+    }
+
+    return Date.now() - lastAssistantSigAt <= STREAMING_IDLE_MS
   }
 
   function textOf(node) {
