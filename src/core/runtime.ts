@@ -219,8 +219,14 @@ export class UnionRuntime {
       }
 
       const current = this.db.listEndpoints().find((item) => item.id === endpoint.id)
-      const settled = current?.status !== "working" && Date.now() - stableSince >= 1500
-      if (settled) return candidate
+      const stableFor = Date.now() - stableSince
+      const providerSettled = current?.status !== "working" && stableFor >= 1500
+      // DeepSeek's web UI occasionally leaves a stale generation indicator.
+      // Its adapter filters reasoning out, so a final-answer candidate that has
+      // remained unchanged for several seconds is safe to relay even if the
+      // status signal failed to flip back to waiting.
+      const deepSeekStableFallback = endpoint.system === "DeepSeek" && stableFor >= 6500
+      if (providerSettled || deepSeekStableFallback) return candidate
     }
 
     throw new Error(`Timed out waiting for ${endpoint.system} response`)
