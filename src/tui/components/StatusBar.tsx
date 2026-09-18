@@ -27,7 +27,7 @@ export function StatusBar(props: {
       </box>
       <text fg={UI.dim}>
         {props.chatMode
-          ? "Enter send · Esc home · Ctrl+P commands · ? help"
+          ? "Enter send · Esc home · Ctrl+P commands"
           : "Ctrl+P commands · ? help · Tab focus · ↑↓ move · Enter open · q quit"}
       </text>
     </box>
