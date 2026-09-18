@@ -1,4 +1,7 @@
 (() => {
+  if (window.__UNION_DEEPSEEK_BRIDGE__) return
+  window.__UNION_DEEPSEEK_BRIDGE__ = true
+
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
   function title() {
@@ -20,13 +23,55 @@
     )
   }
 
+  const THINK_SELECTOR = '.ds-think-content, [class*="think-content" i], [class*="thinking" i], [class*="reasoning" i]'
+
+  function isThinkingNode(node) {
+    return Boolean(node?.closest?.(THINK_SELECTOR))
+  }
+
+  function finalAnswerNode(root) {
+    if (!root) return null
+
+    const main = root.querySelector?.(".ds-assistant-message-main-content")
+    if (main && !isThinkingNode(main)) {
+      // Some builds put the final answer directly on this element; others put
+      // a .ds-markdown below it. Prefer the deepest non-thinking markdown.
+      const nested = [...main.querySelectorAll?.(".ds-markdown, [class*='markdown-body']") || []]
+        .filter((node) => !isThinkingNode(node))
+      return nested.at(-1) || main
+    }
+
+    const markdowns = [
+      ...root.querySelectorAll?.(".ds-markdown, [class*='markdown-body']") || []
+    ].filter((node) => !isThinkingNode(node))
+
+    return markdowns.at(-1) || null
+  }
+
+  function latestAssistantTurn() {
+    const messages = [...document.querySelectorAll(".ds-message, [class*='ds-message']")]
+      .filter((node) =>
+        node.querySelector?.(".ds-assistant-message-main-content, .ds-think-content, .ds-markdown")
+      )
+    return messages.at(-1) || null
+  }
+
   function isGenerating() {
     const selectors = [
+      'div.ds-icon-button[role="button"]:has(svg rect)',
+      'div[role="button"][aria-label*="Stop" i]',
+      '.ds-stop-button',
       'button[aria-label*="Stop" i]',
       'button[data-testid*="stop" i]',
       'div[class*="stop" i][role="button"]'
     ]
     if (selectors.some((selector) => document.querySelector(selector))) return true
+
+    const latest = latestAssistantTurn()
+    if (latest?.querySelector?.(THINK_SELECTOR) && !textOf(finalAnswerNode(latest))) {
+      // DeepSeek has mounted reasoning but has not mounted a deliverable answer.
+      return true
+    }
 
     return [...document.querySelectorAll('button,[role="button"]')].some((element) => {
       const text = (element.textContent || "").trim()
@@ -54,11 +99,15 @@
     const nodes = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')]
     if (!nodes.length) return []
     return nodes
-      .map((node, index) => ({
-        role: node.getAttribute("data-message-author-role"),
-        content: textOf(node.querySelector(".ds-markdown") || node),
-        index
-      }))
+      .map((node, index) => {
+        const role = node.getAttribute("data-message-author-role")
+        const contentNode = role === "assistant" ? finalAnswerNode(node) : node
+        return {
+          role,
+          content: textOf(contentNode),
+          index
+        }
+      })
       .filter((message) =>
         (message.role === "user" || message.role === "assistant") &&
         message.content
@@ -75,9 +124,9 @@
 
     const assistantNodes = dedupeDeepest([
       ...document.querySelectorAll(
-        '.ds-markdown, [class*="AssistantMessage"], [class*="markdown-body"]'
+        '.ds-assistant-message-main-content, .ds-markdown, [class*="AssistantMessage"], [class*="markdown-body"]'
       )
-    ])
+    ]).filter((node) => !isThinkingNode(node))
 
     const rows = [
       ...userNodes.map((node) => ({ node, role: "user" })),
