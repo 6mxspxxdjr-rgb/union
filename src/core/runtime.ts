@@ -48,8 +48,14 @@ export class UnionRuntime {
         this.events.emit("endpoint.status", { system: endpoint.system, title: endpoint.title, status: endpoint.status }, { objectId: endpoint.id, subject: endpoint.subject })
       }
     })
-    await this.indexer.scan()
+
     await this.indexer.watch()
+
+    // Never block the terminal on a full workspace scan. The indexer yields
+    // between chunks so keyboard input and rendering stay responsive.
+    void this.indexer.scan().catch((error) => {
+      this.events.emit("system", { action: "scan.failed", error: String(error), root: this.root })
+    })
   }
 
   subjects() {
