@@ -219,7 +219,7 @@ export class UnionRuntime {
       }
 
       const current = this.db.listEndpoints().find((item) => item.id === endpoint.id)
-      const settled = current?.status !== "working" && Date.now() - stableSince >= 650
+      const settled = current?.status !== "working" && Date.now() - stableSince >= 1500
       if (settled) return candidate
     }
 
