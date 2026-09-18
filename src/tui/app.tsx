@@ -34,16 +34,18 @@ export function App(props: { runtime: UnionRuntime }) {
   const [subjectIndex, setSubjectIndex] = createSignal(0)
   const [fileIndex, setFileIndex] = createSignal(0)
   const [agentIndex, setAgentIndex] = createSignal(0)
-  const [notice, setNotice] = createSignal("ready")
+  const [notice, setNotice] = createSignal("ready · indexing runs in background")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
 
-  const timer = setInterval(async () => {
-    await props.runtime.refreshEndpoints().catch(() => {})
-    setTick((v) => v + 1)
-  }, 1000)
-  onCleanup(() => clearInterval(timer))
+  // Refresh from actual Union events instead of hammering SQLite every second.
+  const offEvent = props.runtime.events.on(() => setTick((v) => v + 1))
+  const clock = setInterval(() => setTick((v) => v + 1), 15_000)
+  onCleanup(() => {
+    offEvent()
+    clearInterval(clock)
+  })
 
   const subjects = createMemo(() => {
     tick()
