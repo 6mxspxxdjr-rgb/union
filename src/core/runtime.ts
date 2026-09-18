@@ -1,6 +1,7 @@
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createHash } from "node:crypto"
+import { stableId } from "./id"
 import { AdapterRegistry } from "./adapters"
 import { CommandRegistry } from "./commands"
 import { UnionEvents } from "./events"
@@ -20,6 +21,7 @@ export class UnionRuntime {
   readonly adapters = new AdapterRegistry()
   readonly commands = new CommandRegistry()
   readonly indexer: FileIndexer
+  private threadState = new Map<string, { generating: boolean; lastAssistant: string }>()
 
   constructor(public readonly root: string, stateDir = join(homedir(), ".union")) {
     // Each indexed root gets its own durable workspace database. This prevents
@@ -50,6 +52,52 @@ export class UnionRuntime {
         this.events.emit("endpoint.connected", { system: endpoint.system, title: endpoint.title, status: endpoint.status }, { objectId: endpoint.id, subject: endpoint.subject })
       } else if (previous.status !== endpoint.status || previous.title !== endpoint.title || previous.subject !== endpoint.subject) {
         this.events.emit("endpoint.status", { system: endpoint.system, title: endpoint.title, status: endpoint.status }, { objectId: endpoint.id, subject: endpoint.subject })
+      }
+    })
+
+    this.bridge.onThread(({ endpointId, snapshot }) => {
+      const endpoint = this.db.listEndpoints().find((item) => item.id === endpointId)
+      if (!endpoint) return
+
+      const now = Date.now()
+      for (const message of snapshot.messages ?? []) {
+        this.db.addMessage({
+          id: stableId("msg", `${endpointId}:${message.index}:${message.role}`),
+          endpointId,
+          role: message.role,
+          content: message.content,
+          createdAt: now + message.index,
+          metadata: { threadIndex: message.index, pushed: true },
+        })
+      }
+
+      const latestAssistant = [...(snapshot.messages ?? [])].reverse().find((message) => message.role === "assistant")?.content ?? ""
+      const nextState = {
+        generating: Boolean(snapshot.generating),
+        lastAssistant: latestAssistant,
+      }
+      const previousState = this.threadState.get(endpointId)
+
+      const completedGeneration =
+        Boolean(previousState?.generating) &&
+        !nextState.generating &&
+        Boolean(nextState.lastAssistant)
+
+      const completedWithoutStreaming =
+        Boolean(previousState) &&
+        !previousState.generating &&
+        !nextState.generating &&
+        previousState.lastAssistant !== nextState.lastAssistant &&
+        Boolean(nextState.lastAssistant)
+
+      this.threadState.set(endpointId, nextState)
+
+      if (completedGeneration || completedWithoutStreaming) {
+        this.events.emit(
+          "message.received",
+          { role: "assistant", chars: nextState.lastAssistant.length, source: "push" },
+          { objectId: endpointId, subject: endpoint.subject },
+        )
       }
     })
 
@@ -95,6 +143,10 @@ export class UnionRuntime {
 
   async rescan() {
     return this.indexer.scan()
+  }
+
+  onThreadUpdate(handler: () => void) {
+    return this.bridge.onThread(() => handler())
   }
 
   async refreshEndpoints() {
