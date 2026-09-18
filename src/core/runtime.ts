@@ -1,5 +1,6 @@
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
+import { createHash } from "node:crypto"
 import { AdapterRegistry } from "./adapters"
 import { CommandRegistry } from "./commands"
 import { UnionEvents } from "./events"
@@ -21,7 +22,10 @@ export class UnionRuntime {
   readonly indexer: FileIndexer
 
   constructor(public readonly root: string, stateDir = join(homedir(), ".union")) {
-    this.db = new UnionDatabase(join(stateDir, "union.db"))
+    // Each indexed root gets its own durable workspace database. This prevents
+    // files and subjects from one project leaking into another workspace.
+    const workspaceKey = createHash("sha1").update(root).digest("hex").slice(0, 16)
+    this.db = new UnionDatabase(join(stateDir, "workspaces", `${workspaceKey}.db`))
     this.events = new UnionEvents(this.db)
     this.icm = new ICM(this.db, root)
     this.bridge = new BridgeServer(Number(process.env.UNION_BRIDGE_PORT ?? 7331))
