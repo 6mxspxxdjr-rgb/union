@@ -1,10 +1,10 @@
 import type { InputRenderable } from "@opentui/core"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
-import type { UnionRuntime } from "../core/runtime"
+import type { RoomTurn, UnionRuntime } from "../core/runtime"
 import type { Endpoint, FileRecord } from "../core/types"
 
-type Lens = "subjects" | "files" | "agents" | "activity" | "chat"
+type Lens = "subjects" | "files" | "agents" | "activity" | "room" | "chat"
 type Focus = "subjects" | "files" | "agents"
 
 const STATUS: Record<string, string> = {
@@ -61,12 +61,16 @@ export function App(props: { runtime: UnionRuntime }) {
   const [fileIndex, setFileIndex] = createSignal(0)
   const [agentIndex, setAgentIndex] = createSignal(0)
   const [chatEndpointId, setChatEndpointId] = createSignal<string>()
+  const [roomTurns, setRoomTurns] = createSignal<RoomTurn[]>([])
+  const [roomRunning, setRoomRunning] = createSignal(false)
+  const [roomStatus, setRoomStatus] = createSignal("ready · 4 alternating turns")
   const [notice, setNotice] = createSignal("ready · AI cockpit online")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   let userPickedSubject = false
   let chatInput: InputRenderable | null = null
+  let roomInput: InputRenderable | null = null
 
   const offEvent = props.runtime.events.on(() => setTick((v) => v + 1))
   const offThread = props.runtime.onThreadUpdate(() => setTick((v) => v + 1))
@@ -92,6 +96,7 @@ export function App(props: { runtime: UnionRuntime }) {
 
   usePaste((event) => {
     if (lens() === "chat") chatInput?.handlePaste(event)
+    else if (lens() === "room") roomInput?.handlePaste(event)
   })
 
   const subjects = createMemo(() => {
@@ -109,8 +114,8 @@ export function App(props: { runtime: UnionRuntime }) {
   })
 
   createEffect(() => {
-    if (lens() !== "chat") return
-    setTimeout(() => chatInput?.focus(), 0)
+    if (lens() === "chat") setTimeout(() => chatInput?.focus(), 0)
+    else if (lens() === "room" && !roomRunning()) setTimeout(() => roomInput?.focus(), 0)
   })
 
   const selectedSubject = createMemo(() =>
@@ -133,6 +138,14 @@ export function App(props: { runtime: UnionRuntime }) {
     tick()
     return props.runtime.endpoints()
   })
+
+  const roomChatGPT = createMemo(() =>
+    allAgents().find((endpoint) => endpoint.system === "ChatGPT" && endpoint.status !== "offline")
+  )
+
+  const roomDeepSeek = createMemo(() =>
+    allAgents().find((endpoint) => endpoint.system === "DeepSeek" && endpoint.status !== "offline")
+  )
 
   const subjectAgents = createMemo(() =>
     allAgents().filter((endpoint) => !selectedSubject() || endpoint.subject === selectedSubject())
@@ -238,6 +251,47 @@ export function App(props: { runtime: UnionRuntime }) {
     }
   }
 
+  async function runRoom(value: string) {
+    const task = value.trim()
+    const chatgpt = roomChatGPT()
+    const deepseek = roomDeepSeek()
+    if (!task || roomRunning()) return
+    if (!chatgpt || !deepseek) {
+      setNotice("Room needs one connected ChatGPT tab and one connected DeepSeek tab")
+      return
+    }
+
+    setRoomTurns([])
+    setRoomRunning(true)
+    setRoomStatus("turn 1/4 · ChatGPT working")
+    setNotice("Room started · ChatGPT ↔ DeepSeek")
+
+    try {
+      if (roomInput) roomInput.value = ""
+      await props.runtime.runTwoAgentRoom(task, chatgpt, deepseek, {
+        turns: 4,
+        onTurn: (turn) => {
+          setRoomTurns((current) => [...current, turn])
+          const next = turn.index + 1
+          setRoomStatus(
+            next <= 4
+              ? `turn ${next}/4 · ${next % 2 === 1 ? "ChatGPT" : "DeepSeek"} working`
+              : "completed · 4/4 turns",
+          )
+          setTick((v) => v + 1)
+        },
+      })
+      setRoomStatus("completed · 4/4 turns")
+      setNotice("Room completed")
+    } catch (error) {
+      setRoomStatus(`failed · ${String(error)}`)
+      setNotice(String(error))
+    } finally {
+      setRoomRunning(false)
+      setTimeout(() => roomInput?.focus(), 0)
+    }
+  }
+
   async function yank() {
     const endpoint = selectedAgent()
     if (!endpoint) return setNotice("select an AI endpoint first")
@@ -299,11 +353,22 @@ export function App(props: { runtime: UnionRuntime }) {
       return
     }
 
+    if (lens() === "room") {
+      if (key.name === "escape" && !roomRunning()) {
+        roomInput?.blur()
+        setLens("subjects")
+        setFocus("agents")
+        setNotice("returned to cockpit")
+      }
+      return
+    }
+
     if (key.name === "q") renderer.destroy()
     else if (key.name === "1") { setLens("subjects"); setFocus("subjects") }
     else if (key.name === "2") { setLens("files"); setFocus("files") }
     else if (key.name === "3") { setLens("agents"); setFocus("agents") }
     else if (key.name === "4") { setLens("activity"); setFocus("subjects") }
+    else if (key.name === "5") { setLens("room"); setFocus("agents") }
     else if (key.name === "tab") cycleFocus()
     else if (key.name === "return" && focus() === "agents") void openChat()
     else if (key.name === "j" || key.name === "down") move(1)
@@ -459,6 +524,71 @@ export function App(props: { runtime: UnionRuntime }) {
             )}</For>
           </Show>
 
+          <Show when={lens() === "room"}>
+            <box flexDirection="column" flexGrow={1} minHeight={0}>
+              <text fg="#f0f6fc"><b>ROOM 1</b> <span style={{ fg: "#8b949e" }}>two-agent relay</span></text>
+              <text fg="#6e7681">
+                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  ↔  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · {roomStatus()}
+              </text>
+              <text> </text>
+
+              <scrollbox
+                flexGrow={1}
+                flexShrink={1}
+                stickyScroll={true}
+                stickyStart="bottom"
+                scrollbarOptions={{ visible: true }}
+                contentOptions={{ flexGrow: 1, gap: 1 }}
+              >
+                <Show
+                  when={roomTurns().length}
+                  fallback={
+                    <box flexDirection="column">
+                      <text fg="#8b949e">Type one shared task below.</text>
+                      <text fg="#6e7681">ChatGPT starts. Union waits for the completed reply, sends it to DeepSeek, then relays DeepSeek back to ChatGPT.</text>
+                      <text fg="#6e7681">This proof-of-concept stops automatically after four agent responses.</text>
+                    </box>
+                  }
+                >
+                  <For each={roomTurns()}>{(turn) => (
+                    <box
+                      flexDirection="column"
+                      paddingLeft={1}
+                      paddingRight={1}
+                      border={["left"]}
+                      borderColor={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}
+                    >
+                      <text fg={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}>
+                        <b>TURN {turn.index} · {turn.system.toUpperCase()}</b>
+                      </text>
+                      <text fg="#c9d1d9">{turn.content}</text>
+                    </box>
+                  )}</For>
+                </Show>
+              </scrollbox>
+
+              <box
+                height={3}
+                marginTop={1}
+                paddingLeft={1}
+                paddingRight={1}
+                border
+                borderColor={roomRunning() ? "#d29922" : "#58a6ff"}
+                alignItems="center"
+              >
+                <text fg="#58a6ff">› </text>
+                <input
+                  ref={(value) => (roomInput = value)}
+                  focused={!roomRunning()}
+                  flexGrow={1}
+                  maxLength={8000}
+                  placeholder={roomRunning() ? "room is working…" : "Give ChatGPT + DeepSeek one shared task…"}
+                  onSubmit={(value) => void runRoom(value)}
+                />
+              </box>
+            </box>
+          </Show>
+
           <Show when={lens() === "chat"}>
             <box flexDirection="column" flexGrow={1} minHeight={0}>
               <text fg="#f0f6fc">
@@ -568,7 +698,7 @@ export function App(props: { runtime: UnionRuntime }) {
           when={lens() === "chat"}
           fallback={
             <text fg="#6e7681">
-              1 cockpit  2 files  3 systems  4 activity   tab focus   j/k move   Enter chat   y AI→buffer   c ICM→buffer   p inject   ⇧p submit   o open   q quit
+              1 cockpit  2 files  3 systems  4 activity  5 room   tab focus   j/k move   Enter chat   y AI→buffer   c ICM→buffer   p inject   ⇧p submit   o open   q quit
             </text>
           }
         >
