@@ -3,9 +3,17 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
 import type { RoomTurn, UnionRuntime } from "../core/runtime"
 import type { Endpoint, FileRecord } from "../core/types"
+import { ShellSidebar } from "./components/ShellSidebar"
+import { AgentRail } from "./components/AgentRail"
+import { ConversationTurn } from "./components/ConversationTurn"
+import { CommandPalette, type PaletteCommand } from "./components/CommandPalette"
+import { HelpOverlay } from "./components/HelpOverlay"
+import { StatusBar } from "./components/StatusBar"
+import { UI } from "./theme"
 
 type Lens = "subjects" | "files" | "agents" | "activity" | "room" | "chat"
 type Focus = "subjects" | "files" | "agents"
+type Overlay = "commands" | "help" | null
 
 const STATUS: Record<string, string> = {
   working: "●",
@@ -69,6 +77,7 @@ export function App(props: { runtime: UnionRuntime }) {
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
+  const [overlay, setOverlay] = createSignal<Overlay>(null)
   let userPickedSubject = false
   let chatInput: InputRenderable | null = null
   let roomInput: InputRenderable | null = null
@@ -96,6 +105,7 @@ export function App(props: { runtime: UnionRuntime }) {
   })
 
   usePaste((event) => {
+    if (overlay()) return
     if (lens() === "chat") chatInput?.handlePaste(event)
     else if (lens() === "room") roomInput?.handlePaste(event)
   })
@@ -152,6 +162,10 @@ export function App(props: { runtime: UnionRuntime }) {
     allAgents().filter((endpoint) => !selectedSubject() || endpoint.subject === selectedSubject())
   )
 
+  const connectedAgents = createMemo(() => allAgents().filter((agent) => agent.status !== "offline"))
+  const workingAgents = createMemo(() => allAgents().filter((agent) => agent.status === "working"))
+  const attentionAgents = createMemo(() => allAgents().filter((agent) => agent.status === "needs_you" || agent.status === "failed"))
+
   const selectedFile = createMemo<FileRecord | undefined>(() =>
     files()[Math.min(fileIndex(), Math.max(0, files().length - 1))]
   )
@@ -192,6 +206,59 @@ export function App(props: { runtime: UnionRuntime }) {
   const topContextFiles = createMemo(() =>
     context().items.filter((item) => item.kind === "file").slice(0, 7)
   )
+
+  const paletteCommands = createMemo<PaletteCommand[]>(() => [
+    { id: "home", label: "Home", description: "Open workspace overview", hint: "H", keywords: ["overview", "dashboard"] },
+    { id: "room", label: "Room", description: "Open ChatGPT ↔ DeepSeek collaboration", hint: "R", keywords: ["agents", "collaborate"] },
+    { id: "chats", label: "Chats", description: "Browse connected AI conversations", hint: "S", keywords: ["agents", "sessions"] },
+    { id: "files", label: "Files", description: "Browse indexed workspace files", hint: "F" },
+    { id: "activity", label: "Activity", description: "Open Union event timeline", hint: "A", keywords: ["events", "log"] },
+    { id: "open-browser", label: "Open selected chat in browser", description: "Jump to the native provider tab", hint: "O", keywords: ["chrome", "provider"] },
+    { id: "rescan", label: "Rescan workspace", description: "Refresh the file index", hint: "G", keywords: ["index", "refresh"] },
+    { id: "compile-context", label: "Compile context", description: "Build the current ICM context buffer", hint: "C", keywords: ["icm", "buffer"] },
+  ])
+
+  function restoreInputFocus() {
+    setTimeout(() => {
+      if (lens() === "chat") chatInput?.focus()
+      else if (lens() === "room" && !roomRunning()) roomInput?.focus()
+    }, 0)
+  }
+
+  function openOverlay(next: Exclude<Overlay, null>) {
+    chatInput?.blur()
+    roomInput?.blur()
+    setOverlay(next)
+  }
+
+  function closeOverlay() {
+    setOverlay(null)
+    restoreInputFocus()
+  }
+
+  function runPaletteCommand(id: string) {
+    setOverlay(null)
+    if (id === "home") { setLens("subjects"); setFocus("subjects") }
+    else if (id === "room") { setLens("room"); setFocus("agents") }
+    else if (id === "chats") { setLens("agents"); setFocus("agents") }
+    else if (id === "files") { setLens("files"); setFocus("files") }
+    else if (id === "activity") { setLens("activity"); setFocus("subjects") }
+    else if (id === "open-browser") {
+      const agent = selectedAgent()
+      if (agent?.url) {
+        props.runtime.openEndpoint(agent)
+        setNotice(`opened ${agent.title} in browser`)
+      } else setNotice("select a connected chat first")
+    }
+    else if (id === "rescan") {
+      void props.runtime.rescan().then((n) => {
+        setNotice(n ? `indexed ${n} files` : "scan already running")
+        setTick((v) => v + 1)
+      })
+    }
+    else if (id === "compile-context") captureContext()
+    restoreInputFocus()
+  }
 
   function move(delta: number) {
     if (focus() === "subjects") {
@@ -350,6 +417,20 @@ export function App(props: { runtime: UnionRuntime }) {
       return
     }
 
+    if (overlay()) return
+
+    if ((key.ctrl && key.name === "p") || (lens() !== "chat" && lens() !== "room" && key.name === "space")) {
+      key.preventDefault()
+      openOverlay("commands")
+      return
+    }
+
+    if (key.name === "?" && lens() !== "chat" && lens() !== "room") {
+      key.preventDefault()
+      openOverlay("help")
+      return
+    }
+
     if (lens() === "chat") {
       if (key.name === "escape") closeChat()
       return
@@ -419,77 +500,88 @@ export function App(props: { runtime: UnionRuntime }) {
         borderColor="#30363d"
       >
         <text fg="#f0f6fc">
-          <b>UNION</b> <span style={{ fg: "#58a6ff" }}>●</span>
-          <span style={{ fg: "#8b949e" }}> AI workspace</span>
+          <b>UNION</b> <span style={{ fg: UI.accent }}>●</span>
+          <span style={{ fg: UI.muted }}> workspace</span>
         </text>
         <text fg="#6e7681">{props.runtime.root}</text>
       </box>
 
       <box flexGrow={1} flexDirection="row">
-        <box
-            width={24}
-            flexDirection="column"
-            padding={1}
-            border={["right"]}
-            borderColor={focus() === "subjects" ? "#58a6ff" : "#30363d"}
-          >
-            <text fg="#8b949e"><b>NAVIGATE</b></text>
-            <text fg={lens() === "subjects" ? "#f0f6fc" : "#6e7681"}>{lens() === "subjects" ? "›" : " "} H  Home</text>
-            <text fg={lens() === "room" ? "#f0f6fc" : "#6e7681"}>{lens() === "room" ? "›" : " "} R  Room</text>
-            <text fg={lens() === "files" ? "#f0f6fc" : "#6e7681"}>{lens() === "files" ? "›" : " "} F  Files</text>
-            <text fg={lens() === "agents" || lens() === "chat" ? "#f0f6fc" : "#6e7681"}>{lens() === "agents" || lens() === "chat" ? "›" : " "} S  Chats</text>
-            <text fg={lens() === "activity" ? "#f0f6fc" : "#6e7681"}>{lens() === "activity" ? "›" : " "} A  Activity</text>
-            <text> </text>
-            <text fg="#8b949e"><b>CONTEXT</b></text>
-            <text fg="#6e7681">{subjects().length} subjects</text>
-            <text> </text>
-            <For each={subjects().slice(0, 26)}>{(subject, i) => (
-              <text fg={i() === subjectIndex() ? "#f0f6fc" : "#8b949e"}>
-                {i() === subjectIndex() ? "›" : " "} {subject.title.slice(0, 15).padEnd(15)}
-                <span style={{ fg: subject.active ? "#58a6ff" : "#484f58" }}>
-                  {subject.active ? ` ●${subject.active}` : ` ${subject.files}`}
-                </span>
-              </text>
-            )}</For>
-          </box>
+        <ShellSidebar
+          active={lens()}
+          subjects={subjects()}
+          subjectIndex={subjectIndex()}
+          focused={focus() === "subjects"}
+        />
 
         <box flexGrow={1} minWidth={48} flexDirection="column" padding={1} border={["right"]} borderColor="#30363d">
           <Show when={lens() === "subjects"}>
-            <text fg="#f0f6fc"><b>{selectedSubject() || "Workspace"}</b></text>
-            <text fg="#6e7681">CURRENT WORK</text>
-            <text> </text>
+            <box flexDirection="column" flexGrow={1}>
+              <text fg={UI.text}><b>HOME</b> <span style={{ fg: UI.dim }}>· {selectedSubject() || "Workspace"}</span></text>
+              <text fg={UI.dim}>One view of what needs attention and what is moving.</text>
+              <text> </text>
 
-            <Show when={subjectAgents().length} fallback={<text fg="#6e7681">No live AI work in this subject yet.</text>}>
-              <For each={subjectAgents().slice(0, 6)}>{(agent) => (
-                <box flexDirection="column" marginBottom={1}>
-                  <text fg="#c9d1d9">
-                    {STATUS[agent.status] || "·"} <b>{agent.title}</b>
-                  </text>
-                  <text fg="#6e7681">
-                    {"  "}{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}
-                  </text>
+              <box flexDirection="row" height={5}>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={UI.borderStrong}>
+                  <text fg={UI.dim}>CONNECTED</text>
+                  <text fg={UI.text}><b>{connectedAgents().length}</b> agents</text>
                 </box>
-              )}</For>
-            </Show>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={workingAgents().length ? UI.accent : UI.borderStrong}>
+                  <text fg={UI.dim}>WORKING</text>
+                  <text fg={workingAgents().length ? UI.accent : UI.text}><b>{workingAgents().length}</b> active</text>
+                </box>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={attentionAgents().length ? UI.amber : UI.borderStrong}>
+                  <text fg={UI.dim}>ATTENTION</text>
+                  <text fg={attentionAgents().length ? UI.amber : UI.text}><b>{attentionAgents().length}</b> waiting</text>
+                </box>
+                <box flexGrow={1} paddingLeft={1} border borderStyle="rounded" borderColor={UI.borderStrong}>
+                  <text fg={UI.dim}>CONTEXT</text>
+                  <text fg={UI.text}><b>{allFiles().length}</b> files</text>
+                </box>
+              </box>
 
-            <text> </text>
-            <text fg="#58a6ff"><b>CONTEXT</b></text>
-            <Show when={topContextFiles().length} fallback={<text fg="#6e7681">No relevant files indexed yet.</text>}>
-              <For each={topContextFiles()}>{(item) => (
-                <text fg="#8b949e">
-                  {"  "}□ {item.title.slice(0, 36)}
-                  <span style={{ fg: "#484f58" }}> · {item.reason}</span>
-                </text>
-              )}</For>
-            </Show>
+              <text> </text>
+              <Show when={attentionAgents().length}>
+                <text fg={UI.amber}><b>NEEDS ATTENTION</b></text>
+                <For each={attentionAgents().slice(0, 4)}>{(agent) => (
+                  <box flexDirection="column" paddingLeft={1} marginBottom={1}>
+                    <text fg={UI.textSoft}>{STATUS[agent.status] || "·"} <b>{agent.title}</b></text>
+                    <text fg={UI.dim}>{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}</text>
+                  </box>
+                )}</For>
+                <text> </text>
+              </Show>
 
-            <text> </text>
-            <text fg="#58a6ff"><b>RECENT</b></text>
-            <Show when={subjectEvents().length} fallback={<text fg="#6e7681">No subject activity yet.</text>}>
-              <For each={subjectEvents().slice(0, 5)}>{(event) => (
-                <text fg="#6e7681">{age(event.createdAt).padStart(4)}  {eventLabel(event).slice(0, 58)}</text>
-              )}</For>
-            </Show>
+              <text fg={UI.accent}><b>ACTIVE WORK</b></text>
+              <Show when={subjectAgents().length} fallback={<text fg={UI.dim}>No live AI work in this context.</text>}>
+                <For each={subjectAgents().filter((agent) => agent.status !== "offline").slice(0, 5)}>{(agent) => (
+                  <box flexDirection="column" paddingLeft={1} marginBottom={1}>
+                    <text fg={UI.textSoft}>{STATUS[agent.status] || "·"} <b>{agent.title}</b></text>
+                    <text fg={UI.dim}>{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}</text>
+                  </box>
+                )}</For>
+              </Show>
+
+              <text> </text>
+              <box flexDirection="row" flexGrow={1}>
+                <box flexGrow={1} flexDirection="column" marginRight={2}>
+                  <text fg={UI.accent}><b>RELEVANT CONTEXT</b></text>
+                  <Show when={topContextFiles().length} fallback={<text fg={UI.dim}>No context files yet.</text>}>
+                    <For each={topContextFiles().slice(0, 5)}>{(item) => (
+                      <text fg={UI.muted}>□ {item.title.slice(0, 32)} <span style={{ fg: UI.dim }}>· {item.reason}</span></text>
+                    )}</For>
+                  </Show>
+                </box>
+                <box flexGrow={1} flexDirection="column">
+                  <text fg={UI.accent}><b>RECENT ACTIVITY</b></text>
+                  <Show when={subjectEvents().length} fallback={<text fg={UI.dim}>No recent activity.</text>}>
+                    <For each={subjectEvents().slice(0, 5)}>{(event) => (
+                      <text fg={UI.dim}>{age(event.createdAt).padStart(4)}  <span style={{ fg: UI.muted }}>{eventLabel(event).slice(0, 34)}</span></text>
+                    )}</For>
+                  </Show>
+                </box>
+              </box>
+            </box>
           </Show>
 
           <Show when={lens() === "files"}>
@@ -572,18 +664,12 @@ export function App(props: { runtime: UnionRuntime }) {
                   }
                 >
                   <For each={roomTurns()}>{(turn) => (
-                    <box
-                      flexDirection="column"
-                      paddingLeft={1}
-                      paddingRight={1}
-                      border={["left"]}
-                      borderColor={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}
-                    >
-                      <text fg={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}>
-                        <b>{turn.system.toUpperCase()}</b> <span style={{ fg: "#6e7681" }}>turn {turn.index}</span>
-                      </text>
-                      <text fg="#c9d1d9">{turn.content}</text>
-                    </box>
+                    <ConversationTurn
+                      label={turn.system}
+                      content={turn.content}
+                      tone={turn.system === "DeepSeek" ? "deepseek" : "chatgpt"}
+                      meta={`turn ${turn.index}`}
+                    />
                   )}</For>
                 </Show>
               </scrollbox>
@@ -631,18 +717,11 @@ export function App(props: { runtime: UnionRuntime }) {
               >
                 <Show when={chatMessages().length} fallback={<text fg="#6e7681">No messages synced yet.</text>}>
                   <For each={chatMessages()}>{(message) => (
-                    <box
-                      flexDirection="column"
-                      paddingLeft={1}
-                      paddingRight={1}
-                      border={["left"]}
-                      borderColor={message.role === "user" ? "#3fb950" : "#58a6ff"}
-                    >
-                      <text fg={message.role === "user" ? "#3fb950" : "#58a6ff"}>
-                        <b>{message.role === "user" ? "YOU" : chatEndpoint()?.system?.toUpperCase() || "AI"}</b>
-                      </text>
-                      <text fg="#c9d1d9">{message.content}</text>
-                    </box>
+                    <ConversationTurn
+                      label={message.role === "user" ? "You" : chatEndpoint()?.system || "AI"}
+                      content={message.content}
+                      tone={message.role === "user" ? "user" : chatEndpoint()?.system === "DeepSeek" ? "deepseek" : "chatgpt"}
+                    />
                   )}</For>
                 </Show>
               </scrollbox>
@@ -670,62 +749,29 @@ export function App(props: { runtime: UnionRuntime }) {
           </Show>
         </box>
 
-        <box
-          width={42}
-          flexDirection="column"
-          padding={1}
-          borderColor={focus() === "agents" ? "#58a6ff" : "#30363d"}
-        >
-          <text fg="#f0f6fc"><b>AGENTS</b> <span style={{ fg: "#58a6ff" }}>{allAgents().length}</span></text>
-          <text fg="#6e7681">connected conversations</text>
-          <text> </text>
-
-          <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open supported AI tab.</text>}>
-            <For each={allAgents().slice(0, 12)}>{(agent, i) => (
-              <box flexDirection="column" marginBottom={1}>
-                <text fg={i() === agentIndex() ? "#f0f6fc" : "#8b949e"}>
-                  {i() === agentIndex() ? "›" : " "} {STATUS[agent.status] || "·"} <b>{agent.system}</b> {agent.title.slice(0, 23)}
-                </text>
-                <text fg="#484f58">
-                  {"    "}{STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {agent.subject || "Unsorted"} · {age(agent.updatedAt)}
-                </text>
-              </box>
-            )}</For>
-          </Show>
-
-          <Show when={capture()}>
-            <text> </text>
-            <text fg="#58a6ff"><b>ROUTING BUFFER</b></text>
-            <text fg="#8b949e">{captureSource()}</text>
-            <text fg="#484f58">{capture().length} chars ready</text>
-          </Show>
-
-          <text> </text>
-          <text fg="#58a6ff"><b>RECENT</b></text>
-          <For each={events().slice(0, 5)}>{(event) => (
-            <text fg="#484f58">{age(event.createdAt).padStart(4)} {eventLabel(event).slice(0, 30)}</text>
-          )}</For>
-        </box>
+        <AgentRail
+          agents={allAgents()}
+          selectedId={selectedAgent()?.id}
+          focused={focus() === "agents"}
+          recent={events().slice(0, 5).map((event) => ({ createdAt: event.createdAt, label: eventLabel(event) }))}
+        />
       </box>
 
-      <box height={4} flexDirection="column" paddingLeft={2} paddingRight={2} border={["top"]} borderColor="#30363d">
-        <text fg={busy() ? "#d29922" : "#8b949e"}>
-          {busy() ? "working…" : notice()}
-          <Show when={capture()}>
-            <span style={{ fg: "#58a6ff" }}> · buffer ready</span>
-          </Show>
-        </text>
-        <Show
-          when={lens() === "chat"}
-          fallback={
-            <text fg="#6e7681">
-              H home   R room   F files   S chats   A activity   Tab focus   ↑/↓ move   Enter open   q quit
-            </text>
-          }
-        >
-          <text fg="#6e7681">Enter send · Esc home · Ctrl+C quit</text>
-        </Show>
-      </box>
+      <StatusBar
+        notice={notice()}
+        busy={busy()}
+        connected={connectedAgents().length}
+        working={workingAgents().length}
+        bufferReady={Boolean(capture())}
+        chatMode={lens() === "chat" || lens() === "room"}
+      />
+
+      <Show when={overlay() === "commands"}>
+        <CommandPalette commands={paletteCommands()} onRun={runPaletteCommand} onClose={closeOverlay} />
+      </Show>
+      <Show when={overlay() === "help"}>
+        <HelpOverlay onClose={closeOverlay} />
+      </Show>
     </box>
   )
 }
