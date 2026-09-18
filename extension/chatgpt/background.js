@@ -8,6 +8,17 @@ function send(message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
 }
 
+function endpointPrefix(adapterId) {
+  if (adapterId === "deepseek-browser") return "deepseek"
+  return "chatgpt"
+}
+
+function endpointRecordForTab(tabId) {
+  for (const [endpointId, record] of endpoints) {
+    if (record.tabId === tabId) return { endpointId, record }
+  }
+}
+
 function connect() {
   clearTimeout(reconnectTimer)
   clearInterval(heartbeatTimer)
@@ -37,7 +48,7 @@ function connect() {
 async function handleRequest(request) {
   const record = endpoints.get(request.endpointId)
   if (!record) {
-    send({ type: "response", requestId: request.requestId, ok: false, error: "ChatGPT tab is no longer registered" })
+    send({ type: "response", requestId: request.requestId, ok: false, error: "AI tab is no longer registered" })
     return
   }
 
@@ -47,7 +58,7 @@ async function handleRequest(request) {
       action: request.action,
       payload: request.payload || {}
     })
-    if (!result?.ok) throw new Error(result?.error || "ChatGPT content adapter failed")
+    if (!result?.ok) throw new Error(result?.error || "Browser content adapter failed")
     send({ type: "response", requestId: request.requestId, ok: true, data: result.data })
   } catch (error) {
     send({
@@ -62,13 +73,18 @@ async function handleRequest(request) {
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (!sender.tab?.id) return
   const tabId = sender.tab.id
-  const endpointId = `chatgpt_tab_${tabId}`
 
   if (message?.type === "endpoint.upsert" && message.endpoint) {
+    const adapterId = message.endpoint.adapterId || "chatgpt-browser"
+    const endpointId = `${endpointPrefix(adapterId)}_tab_${tabId}`
+
+    const previous = endpointRecordForTab(tabId)
+    if (previous && previous.endpointId !== endpointId) endpoints.delete(previous.endpointId)
+
     const endpoint = {
       ...message.endpoint,
       id: endpointId,
-      adapterId: "chatgpt-browser",
+      adapterId,
       externalId: String(tabId),
       updatedAt: Date.now()
     }
@@ -78,17 +94,18 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 
   if (message?.type === "thread.updated" && message.snapshot) {
-    const existing = endpoints.get(endpointId)
-    if (existing) {
-      existing.endpoint = {
-        ...existing.endpoint,
-        title: message.snapshot.title || existing.endpoint.title,
-        url: message.snapshot.url || existing.endpoint.url,
-        status: message.snapshot.generating ? "working" : "waiting",
-        updatedAt: Date.now()
-      }
-      send({ type: "endpoint.upsert", endpoint: existing.endpoint })
+    const found = endpointRecordForTab(tabId)
+    if (!found) return
+    const { endpointId, record } = found
+
+    record.endpoint = {
+      ...record.endpoint,
+      title: message.snapshot.title || record.endpoint.title,
+      url: message.snapshot.url || record.endpoint.url,
+      status: message.snapshot.generating ? "working" : "waiting",
+      updatedAt: Date.now()
     }
+    send({ type: "endpoint.upsert", endpoint: record.endpoint })
 
     send({
       type: "thread.updated",
@@ -99,10 +116,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const endpointId = `chatgpt_tab_${tabId}`
-  if (!endpoints.has(endpointId)) return
-  endpoints.delete(endpointId)
-  send({ type: "endpoint.status", endpointId, status: "offline" })
+  const found = endpointRecordForTab(tabId)
+  if (!found) return
+  endpoints.delete(found.endpointId)
+  send({ type: "endpoint.status", endpointId: found.endpointId, status: "offline" })
 })
 
 connect()
