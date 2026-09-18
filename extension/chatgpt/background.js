@@ -60,18 +60,42 @@ async function handleRequest(request) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message?.type !== "endpoint.upsert" || !sender.tab?.id || !message.endpoint) return
+  if (!sender.tab?.id) return
   const tabId = sender.tab.id
   const endpointId = `chatgpt_tab_${tabId}`
-  const endpoint = {
-    ...message.endpoint,
-    id: endpointId,
-    adapterId: "chatgpt-browser",
-    externalId: String(tabId),
-    updatedAt: Date.now()
+
+  if (message?.type === "endpoint.upsert" && message.endpoint) {
+    const endpoint = {
+      ...message.endpoint,
+      id: endpointId,
+      adapterId: "chatgpt-browser",
+      externalId: String(tabId),
+      updatedAt: Date.now()
+    }
+    endpoints.set(endpointId, { tabId, endpoint })
+    send({ type: "endpoint.upsert", endpoint })
+    return
   }
-  endpoints.set(endpointId, { tabId, endpoint })
-  send({ type: "endpoint.upsert", endpoint })
+
+  if (message?.type === "thread.updated" && message.snapshot) {
+    const existing = endpoints.get(endpointId)
+    if (existing) {
+      existing.endpoint = {
+        ...existing.endpoint,
+        title: message.snapshot.title || existing.endpoint.title,
+        url: message.snapshot.url || existing.endpoint.url,
+        status: message.snapshot.generating ? "working" : "waiting",
+        updatedAt: Date.now()
+      }
+      send({ type: "endpoint.upsert", endpoint: existing.endpoint })
+    }
+
+    send({
+      type: "thread.updated",
+      endpointId,
+      snapshot: message.snapshot
+    })
+  }
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => {
