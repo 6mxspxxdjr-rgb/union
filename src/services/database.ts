@@ -136,6 +136,17 @@ export class UnionDatabase {
     return this.db.query(`SELECT id,endpoint_id AS endpointId,role,content,metadata,created_at AS createdAt FROM messages ORDER BY created_at DESC LIMIT ?`).all(limit).map((row: any) => ({ ...row, metadata: JSON.parse(row.metadata || "{}") })) as UnionMessage[]
   }
 
+  messagesForEndpoint(endpointId: string, limit = 24): UnionMessage[] {
+    const rows = this.db.query(`
+      SELECT id,endpoint_id AS endpointId,role,content,metadata,created_at AS createdAt
+      FROM messages
+      WHERE endpoint_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(endpointId, limit).map((row: any) => ({ ...row, metadata: JSON.parse(row.metadata || "{}") })) as UnionMessage[]
+    return rows.reverse()
+  }
+
   addEvent(event: UnionEvent) {
     this.db.query(`INSERT INTO events (id,type,object_id,subject,payload,created_at) VALUES (?,?,?,?,?,?)`).run(
       event.id, event.type, event.objectId ?? null, event.subject ?? null, JSON.stringify(event.payload), event.createdAt,
