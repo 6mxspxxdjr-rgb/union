@@ -1,5 +1,5 @@
 import { homedir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { createHash } from "node:crypto"
 import { AdapterRegistry } from "./adapters"
 import { CommandRegistry } from "./commands"
@@ -101,26 +101,47 @@ export class UnionRuntime {
     for (const endpoint of await this.adapters.discoverAll()) this.db.upsertEndpoint(this.icm.normalizeEndpoint(endpoint))
   }
 
-  async readLatest(endpoint: Endpoint) {
+  async syncThread(endpoint: Endpoint) {
     const messages = await this.adapters.read(endpoint)
-    for (const message of messages) {
-      this.db.addMessage(message)
-      this.events.emit("message.received", { role: message.role, chars: message.content.length }, { objectId: endpoint.id, subject: endpoint.subject })
-    }
+    for (const message of messages) this.db.addMessage(message)
     return messages
+  }
+
+  async readLatest(endpoint: Endpoint) {
+    const messages = await this.syncThread(endpoint)
+    const latest = [...messages].reverse().find((message) => message.role === "assistant")
+    if (latest) {
+      this.events.emit("message.received", { role: latest.role, chars: latest.content.length }, { objectId: endpoint.id, subject: endpoint.subject })
+      return [latest]
+    }
+    return []
   }
 
   async send(endpoint: Endpoint, content: string, submit = false) {
     await this.adapters.send(endpoint, content, submit)
     this.events.emit("message.sent", { chars: content.length, submit }, { objectId: endpoint.id, subject: endpoint.subject })
+    if (submit) {
+      await new Promise((resolve) => setTimeout(resolve, 180))
+      await this.syncThread(endpoint).catch(() => {})
+    }
   }
 
-  openFile(file: FileRecord) {
+  revealFile(file: FileRecord) {
     const command = process.platform === "darwin"
-      ? ["open", file.path]
+      ? ["open", "-R", file.path]
       : process.platform === "win32"
-        ? ["cmd", "/c", "start", "", file.path]
-        : ["xdg-open", file.path]
+        ? ["explorer", "/select,", file.path]
+        : ["xdg-open", dirname(file.path)]
+    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" })
+  }
+
+  openEndpoint(endpoint: Endpoint) {
+    if (!endpoint.url) return
+    const command = process.platform === "darwin"
+      ? ["open", endpoint.url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", endpoint.url]
+        : ["xdg-open", endpoint.url]
     Bun.spawn(command, { stdout: "ignore", stderr: "ignore" })
   }
 
