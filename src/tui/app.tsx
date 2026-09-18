@@ -690,7 +690,9 @@ export function App(props: { runtime: UnionRuntime }) {
                   flexGrow={1}
                   maxLength={8000}
                   placeholder={roomRunning() ? "room is working…" : "Give ChatGPT + DeepSeek one shared task…"}
-                  onSubmit={(value) => void runRoom(value)}
+                  onSubmit={(value) => {
+                    if (typeof value === "string") void runRoom(value)
+                  }}
                 />
               </box>
             </box>
@@ -742,7 +744,9 @@ export function App(props: { runtime: UnionRuntime }) {
                   flexGrow={1}
                   maxLength={8000}
                   placeholder={busy() ? "sending…" : `Message this ${chatEndpoint()?.system || "AI"} session…`}
-                  onSubmit={(value) => void submitChat(value)}
+                  onSubmit={(value) => {
+                    if (typeof value === "string") void submitChat(value)
+                  }}
                 />
               </box>
             </box>
