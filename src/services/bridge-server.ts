@@ -38,6 +38,13 @@ export class BridgeServer {
           this.events.emit("endpoint", endpoint)
           return
         }
+        if (message.type === "thread.updated" && message.endpointId && message.snapshot) {
+          this.events.emit("thread", {
+            endpointId: message.endpointId,
+            snapshot: message.snapshot,
+          })
+          return
+        }
         if (message.type === "response" && message.requestId) {
           const pending = this.pending.get(message.requestId)
           if (!pending) return
@@ -79,6 +86,19 @@ export class BridgeServer {
   onEndpoint(handler: (endpoint: Endpoint) => void) {
     this.events.on("endpoint", handler)
     return () => this.events.off("endpoint", handler)
+  }
+
+  onThread(handler: (update: {
+    endpointId: string
+    snapshot: {
+      title?: string
+      url?: string
+      generating?: boolean
+      messages?: Array<{ role: "user" | "assistant"; content: string; index: number }>
+    }
+  }) => void) {
+    this.events.on("thread", handler)
+    return () => this.events.off("thread", handler)
   }
 
   request<T = unknown>(endpointId: string, action: string, payload: Record<string, unknown> = {}, timeoutMs = 7000): Promise<T> {
