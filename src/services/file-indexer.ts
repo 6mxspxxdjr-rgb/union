@@ -36,8 +36,11 @@ const TEXTISH = new Set([
   ".csv", ".tsv", ".xml", ".ini", ".env", ".c", ".cpp", ".h", ".hpp",
 ])
 
+const yieldToTerminal = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
 export class FileIndexer {
   private watcher?: FSWatcher
+  private scanning = false
 
   constructor(
     public readonly root: string,
@@ -78,18 +81,42 @@ export class FileIndexer {
   }
 
   async scan() {
-    const paths = await fg("**/*", {
-      cwd: this.root,
-      absolute: true,
-      onlyFiles: true,
-      dot: true,
-      followSymbolicLinks: false,
-      unique: true,
-      ignore: DEFAULT_IGNORES,
-    })
-    for (const path of paths) this.ingest(path, "file.indexed", false)
-    this.events.emit("system", { action: "scan.completed", count: paths.length, root: this.root })
-    return paths.length
+    if (this.scanning) return 0
+    this.scanning = true
+    this.events.emit("system", { action: "scan.started", root: this.root })
+
+    try {
+      const paths = await fg("**/*", {
+        cwd: this.root,
+        absolute: true,
+        onlyFiles: true,
+        dot: true,
+        followSymbolicLinks: false,
+        unique: true,
+        ignore: DEFAULT_IGNORES,
+      })
+
+      for (let index = 0; index < paths.length; index++) {
+        this.ingest(paths[index]!, "file.indexed", false)
+
+        // Cooperative scanning: give OpenTUI/input a chance to run.
+        if ((index + 1) % 50 === 0) await yieldToTerminal()
+
+        if ((index + 1) % 500 === 0) {
+          this.events.emit("system", {
+            action: "scan.progress",
+            indexed: index + 1,
+            total: paths.length,
+            root: this.root,
+          })
+        }
+      }
+
+      this.events.emit("system", { action: "scan.completed", count: paths.length, root: this.root })
+      return paths.length
+    } finally {
+      this.scanning = false
+    }
   }
 
   async watch() {
