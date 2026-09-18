@@ -8,6 +8,7 @@ import { UnionEvents } from "./events"
 import { ICM } from "./icm"
 import type { Endpoint, FileRecord } from "./types"
 import { ChatGPTAdapter } from "../adapters/chatgpt"
+import { DeepSeekAdapter } from "../adapters/deepseek"
 import { BridgeServer } from "../services/bridge-server"
 import { UnionDatabase } from "../services/database"
 import { FileIndexer } from "../services/file-indexer"
@@ -33,6 +34,7 @@ export class UnionRuntime {
     this.bridge = new BridgeServer(Number(process.env.UNION_BRIDGE_PORT ?? 7331))
     this.indexer = new FileIndexer(root, this.db, this.icm, this.events)
     this.adapters.register(new ChatGPTAdapter(this.bridge))
+    this.adapters.register(new DeepSeekAdapter(this.bridge))
 
     this.commands
       .register({ name: "rescan", aliases: ["scan"], title: "Rescan Files", description: "Re-index the current workspace", run: async (_, ctx) => { await ctx.rescan(); ctx.notify("Workspace re-indexed") } })
@@ -45,7 +47,10 @@ export class UnionRuntime {
   async start() {
     this.bridge.start()
     this.bridge.onEndpoint((raw) => {
-      const endpoint = this.icm.normalizeEndpoint({ ...raw, adapterId: "chatgpt-browser" })
+      const endpoint = this.icm.normalizeEndpoint({
+        ...raw,
+        adapterId: raw.adapterId || "chatgpt-browser",
+      })
       const previous = this.db.listEndpoints().find((item) => item.id === endpoint.id)
       this.db.upsertEndpoint(endpoint)
       if (!previous || previous.status === "offline") {
