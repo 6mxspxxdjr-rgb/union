@@ -39,9 +39,20 @@
       .slice(-20)
   }
 
+  function latestAssistantMessage() {
+    const nodes = [...document.querySelectorAll("[data-message-author-role]")]
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      const node = nodes[index]
+      if (node.getAttribute("data-message-author-role") !== "assistant") continue
+      const content = messageText(node, "assistant")
+      if (!content) return null
+      return { role: "assistant", content, index }
+    }
+    return null
+  }
+
   function latestAssistant() {
-    const messages = threadMessages().filter((message) => message.role === "assistant")
-    return messages.at(-1)?.content || ""
+    return latestAssistantMessage()?.content || ""
   }
 
   function composer() {
@@ -118,22 +129,33 @@
     }
   }
 
+  // Push only generation state while streaming, then the completed latest
+  // assistant answer once. Full history remains available through read_thread.
+  function relaySnapshot() {
+    const generating = isGenerating()
+    const latest = generating ? null : latestAssistantMessage()
+    return {
+      title: title(),
+      url: location.href,
+      generating,
+      messages: latest ? [latest] : []
+    }
+  }
+
   let lastThreadSignature = ""
   let threadTimer
 
   function scheduleThreadUpdate(delay = 180) {
     clearTimeout(threadTimer)
     threadTimer = setTimeout(() => {
-      const snapshot = threadSnapshot()
+      const snapshot = relaySnapshot()
       const last = snapshot.messages.at(-1)
-      const previous = snapshot.messages.at(-2)
+      const content = last?.content || ""
       const signature = [
         snapshot.generating ? "1" : "0",
-        snapshot.messages.length,
-        previous?.role || "",
-        previous?.content || "",
-        last?.role || "",
-        last?.content || ""
+        last?.index ?? -1,
+        content.length,
+        content.slice(-96)
       ].join("\u001f")
 
       if (signature === lastThreadSignature) return
@@ -147,7 +169,7 @@
 
     ;(async () => {
       if (message.action === "read_latest") {
-        return { title: title(), content: latestAssistant(), url: location.href }
+        return { title: title(), content: latestAssistant(), url: location.href, generating: isGenerating() }
       }
       if (message.action === "read_thread") {
         return threadSnapshot()
