@@ -28,6 +28,16 @@ export class AdapterRegistry {
     return adapter.read(endpoint.id)
   }
 
+  async readLatest(endpoint: Endpoint): Promise<string> {
+    const adapter = this.adapters.get(endpoint.adapterId)
+    if (!adapter) throw new Error(`Missing adapter: ${endpoint.adapterId}`)
+    if (!adapter.readLatest) {
+      const messages = await adapter.read(endpoint.id)
+      return [...messages].reverse().find((message) => message.role === "assistant")?.content.trim() ?? ""
+    }
+    return adapter.readLatest(endpoint.id)
+  }
+
   async send(endpoint: Endpoint, content: string, submit = false) {
     const adapter = this.adapters.get(endpoint.adapterId)
     if (!adapter) throw new Error(`Missing adapter: ${endpoint.adapterId}`)
