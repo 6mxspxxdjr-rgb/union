@@ -3,9 +3,17 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 import { useKeyboard, usePaste, useRenderer } from "@opentui/solid"
 import type { RoomTurn, UnionRuntime } from "../core/runtime"
 import type { Endpoint, FileRecord } from "../core/types"
+import { ShellSidebar } from "./components/ShellSidebar"
+import { AgentRail } from "./components/AgentRail"
+import { ConversationTurn } from "./components/ConversationTurn"
+import { CommandPalette, type PaletteCommand } from "./components/CommandPalette"
+import { HelpOverlay } from "./components/HelpOverlay"
+import { StatusBar } from "./components/StatusBar"
+import { UI } from "./theme"
 
 type Lens = "subjects" | "files" | "agents" | "activity" | "room" | "chat"
 type Focus = "subjects" | "files" | "agents"
+type Overlay = "commands" | "help" | null
 
 const STATUS: Record<string, string> = {
   working: "●",
@@ -61,14 +69,18 @@ export function App(props: { runtime: UnionRuntime }) {
   const [fileIndex, setFileIndex] = createSignal(0)
   const [agentIndex, setAgentIndex] = createSignal(0)
   const [chatEndpointId, setChatEndpointId] = createSignal<string>()
+  const [chatDraft, setChatDraft] = createSignal("")
+  const [roomDraft, setRoomDraft] = createSignal("")
   const [roomTurns, setRoomTurns] = createSignal<RoomTurn[]>([])
   const [roomTurnLimit, setRoomTurnLimit] = createSignal(4)
+  const [roomPairMode, setRoomPairMode] = createSignal<"chatgpt-deepseek" | "chatgpt-chatgpt">("chatgpt-deepseek")
   const [roomRunning, setRoomRunning] = createSignal(false)
   const [roomStatus, setRoomStatus] = createSignal("ready")
   const [notice, setNotice] = createSignal("ready")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
+  const [overlay, setOverlay] = createSignal<Overlay>(null)
   let userPickedSubject = false
   let chatInput: InputRenderable | null = null
   let roomInput: InputRenderable | null = null
@@ -96,6 +108,7 @@ export function App(props: { runtime: UnionRuntime }) {
   })
 
   usePaste((event) => {
+    if (overlay()) return
     if (lens() === "chat") chatInput?.handlePaste(event)
     else if (lens() === "room") roomInput?.handlePaste(event)
   })
@@ -140,17 +153,40 @@ export function App(props: { runtime: UnionRuntime }) {
     return props.runtime.endpoints()
   })
 
-  const roomChatGPT = createMemo(() =>
-    allAgents().find((endpoint) => endpoint.system === "ChatGPT" && endpoint.status !== "offline")
+  const connectedChatGPT = createMemo(() =>
+    allAgents().filter((endpoint) => endpoint.system === "ChatGPT" && endpoint.status !== "offline")
   )
 
-  const roomDeepSeek = createMemo(() =>
-    allAgents().find((endpoint) => endpoint.system === "DeepSeek" && endpoint.status !== "offline")
+  const connectedDeepSeek = createMemo(() =>
+    allAgents().filter((endpoint) => endpoint.system === "DeepSeek" && endpoint.status !== "offline")
   )
+
+  const roomPair = createMemo<[Endpoint | undefined, Endpoint | undefined]>(() => {
+    if (roomPairMode() === "chatgpt-chatgpt") {
+      return [connectedChatGPT()[0], connectedChatGPT()[1]]
+    }
+    return [connectedChatGPT()[0], connectedDeepSeek()[0]]
+  })
+
+  const roomFirst = createMemo(() => roomPair()[0])
+  const roomSecond = createMemo(() => roomPair()[1])
+
+  const roomPairLabel = createMemo(() => {
+    const first = roomFirst()
+    const second = roomSecond()
+    if (!first || !second) {
+      return roomPairMode() === "chatgpt-chatgpt" ? "ChatGPT ↔ ChatGPT" : "ChatGPT ↔ DeepSeek"
+    }
+    return `${first.system} ↔ ${second.system}`
+  })
 
   const subjectAgents = createMemo(() =>
     allAgents().filter((endpoint) => !selectedSubject() || endpoint.subject === selectedSubject())
   )
+
+  const connectedAgents = createMemo(() => allAgents().filter((agent) => agent.status !== "offline"))
+  const workingAgents = createMemo(() => allAgents().filter((agent) => agent.status === "working"))
+  const attentionAgents = createMemo(() => allAgents().filter((agent) => agent.status === "needs_you" || agent.status === "failed"))
 
   const selectedFile = createMemo<FileRecord | undefined>(() =>
     files()[Math.min(fileIndex(), Math.max(0, files().length - 1))]
@@ -192,6 +228,69 @@ export function App(props: { runtime: UnionRuntime }) {
   const topContextFiles = createMemo(() =>
     context().items.filter((item) => item.kind === "file").slice(0, 7)
   )
+
+  const paletteCommands = createMemo<PaletteCommand[]>(() => [
+    { id: "home", label: "Home", description: "Open workspace overview", hint: "H", keywords: ["overview", "dashboard"] },
+    { id: "room", label: "Room", description: "Open multi-agent collaboration", hint: "R", keywords: ["agents", "collaborate"] },
+    { id: "room-pair-gpt-gpt", label: "Room pair: ChatGPT ↔ ChatGPT", description: "Use two connected ChatGPT sessions", keywords: ["room", "pair", "chatgpt"] },
+    { id: "room-pair-gpt-deepseek", label: "Room pair: ChatGPT ↔ DeepSeek", description: "Use one ChatGPT and one DeepSeek session", keywords: ["room", "pair", "deepseek"] },
+    { id: "chats", label: "Chats", description: "Browse connected AI conversations", hint: "S", keywords: ["agents", "sessions"] },
+    { id: "files", label: "Files", description: "Browse indexed workspace files", hint: "F" },
+    { id: "activity", label: "Activity", description: "Open Union event timeline", hint: "A", keywords: ["events", "log"] },
+    { id: "open-browser", label: "Open selected chat in browser", description: "Jump to the native provider tab", hint: "O", keywords: ["chrome", "provider"] },
+    { id: "rescan", label: "Rescan workspace", description: "Refresh the file index", hint: "G", keywords: ["index", "refresh"] },
+    { id: "compile-context", label: "Compile context", description: "Build the current ICM context buffer", hint: "C", keywords: ["icm", "buffer"] },
+  ])
+
+  function restoreInputFocus() {
+    setTimeout(() => {
+      if (lens() === "chat") chatInput?.focus()
+      else if (lens() === "room" && !roomRunning()) roomInput?.focus()
+    }, 0)
+  }
+
+  function openOverlay(next: Exclude<Overlay, null>) {
+    chatInput?.blur()
+    roomInput?.blur()
+    setOverlay(next)
+  }
+
+  function closeOverlay() {
+    setOverlay(null)
+    restoreInputFocus()
+  }
+
+  function runPaletteCommand(id: string) {
+    setOverlay(null)
+    if (id === "home") { setLens("subjects"); setFocus("subjects") }
+    else if (id === "room") { setLens("room"); setFocus("agents") }
+    else if (id === "chats") { setLens("agents"); setFocus("agents") }
+    else if (id === "files") { setLens("files"); setFocus("files") }
+    else if (id === "activity") { setLens("activity"); setFocus("subjects") }
+    else if (id === "room-pair-gpt-gpt") {
+      setRoomPairMode("chatgpt-chatgpt")
+      setNotice("Room pair · ChatGPT ↔ ChatGPT")
+    }
+    else if (id === "room-pair-gpt-deepseek") {
+      setRoomPairMode("chatgpt-deepseek")
+      setNotice("Room pair · ChatGPT ↔ DeepSeek")
+    }
+    else if (id === "open-browser") {
+      const agent = selectedAgent()
+      if (agent?.url) {
+        props.runtime.openEndpoint(agent)
+        setNotice(`opened ${agent.title} in browser`)
+      } else setNotice("select a connected chat first")
+    }
+    else if (id === "rescan") {
+      void props.runtime.rescan().then((n) => {
+        setNotice(n ? `indexed ${n} files` : "scan already running")
+        setTick((v) => v + 1)
+      })
+    }
+    else if (id === "compile-context") captureContext()
+    restoreInputFocus()
+  }
 
   function move(delta: number) {
     if (focus() === "subjects") {
@@ -240,6 +339,7 @@ export function App(props: { runtime: UnionRuntime }) {
     setNotice(`sending → ${endpoint.title}`)
     try {
       await props.runtime.send(endpoint, text, true)
+      setChatDraft("")
       if (chatInput) chatInput.value = ""
       await props.runtime.syncThread(endpoint).catch(() => {})
       setTick((v) => v + 1)
@@ -254,30 +354,36 @@ export function App(props: { runtime: UnionRuntime }) {
 
   async function runRoom(value: string) {
     const task = value.trim()
-    const chatgpt = roomChatGPT()
-    const deepseek = roomDeepSeek()
+    const first = roomFirst()
+    const second = roomSecond()
     if (!task || roomRunning()) return
-    if (!chatgpt || !deepseek) {
-      setNotice("Room needs one connected ChatGPT tab and one connected DeepSeek tab")
+    if (!first || !second) {
+      setNotice(
+        roomPairMode() === "chatgpt-chatgpt"
+          ? "Room needs two connected ChatGPT tabs"
+          : "Room needs one connected ChatGPT tab and one connected DeepSeek tab"
+      )
       return
     }
 
     const turnLimit = roomTurnLimit()
     setRoomTurns([])
     setRoomRunning(true)
-    setRoomStatus(`turn 1/${turnLimit} · ChatGPT working`)
-    setNotice("Room started · ChatGPT ↔ DeepSeek")
+    setRoomStatus(`turn 1/${turnLimit} · ${first.title || first.system} working`)
+    setNotice(`Room started · ${roomPairLabel()}`)
 
     try {
+      setRoomDraft("")
       if (roomInput) roomInput.value = ""
-      await props.runtime.runTwoAgentRoom(task, chatgpt, deepseek, {
+      await props.runtime.runTwoAgentRoom(task, first, second, {
         turns: turnLimit,
         onTurn: (turn) => {
           setRoomTurns((current) => [...current, turn])
           const next = turn.index + 1
+          const nextAgent = next % 2 === 1 ? first : second
           setRoomStatus(
             next <= turnLimit
-              ? `turn ${next}/${turnLimit} · ${next % 2 === 1 ? "ChatGPT" : "DeepSeek"} working`
+              ? `turn ${next}/${turnLimit} · ${nextAgent.title || nextAgent.system} working`
               : `completed · ${turnLimit}/${turnLimit} turns`,
           )
           setTick((v) => v + 1)
@@ -350,12 +456,40 @@ export function App(props: { runtime: UnionRuntime }) {
       return
     }
 
+    if (overlay()) return
+
+    if ((key.ctrl && key.name === "p") || (lens() !== "chat" && lens() !== "room" && key.name === "space")) {
+      key.preventDefault()
+      openOverlay("commands")
+      return
+    }
+
+    if (key.name === "?" && lens() !== "chat" && lens() !== "room") {
+      key.preventDefault()
+      openOverlay("help")
+      return
+    }
+
     if (lens() === "chat") {
       if (key.name === "escape") closeChat()
       return
     }
 
     if (lens() === "room") {
+      const shiftedP =
+        (key.shift && String(key.name || "").toLowerCase() === "p") ||
+        key.sequence === "P"
+
+      if (!roomRunning() && shiftedP) {
+        key.preventDefault()
+        key.stopPropagation()
+        const next = roomPairMode() === "chatgpt-chatgpt" ? "chatgpt-deepseek" : "chatgpt-chatgpt"
+        setRoomPairMode(next)
+        const label = next === "chatgpt-chatgpt" ? "ChatGPT ↔ ChatGPT" : "ChatGPT ↔ DeepSeek"
+        setRoomStatus("ready")
+        setNotice(`Room pair · ${label}`)
+        return
+      }
       if (!roomRunning() && (key.name === "[" || key.sequence === "[")) {
         key.preventDefault()
         key.stopPropagation()
@@ -366,7 +500,7 @@ export function App(props: { runtime: UnionRuntime }) {
       if (!roomRunning() && (key.name === "]" || key.sequence === "]")) {
         key.preventDefault()
         key.stopPropagation()
-        setRoomTurnLimit((current) => Math.min(12, current + 1))
+        setRoomTurnLimit((current) => Math.min(30, current + 1))
         setRoomStatus("ready")
         return
       }
@@ -419,77 +553,88 @@ export function App(props: { runtime: UnionRuntime }) {
         borderColor="#30363d"
       >
         <text fg="#f0f6fc">
-          <b>UNION</b> <span style={{ fg: "#58a6ff" }}>●</span>
-          <span style={{ fg: "#8b949e" }}> AI workspace</span>
+          <b>UNION</b> <span style={{ fg: UI.accent }}>●</span>
+          <span style={{ fg: UI.muted }}> workspace</span>
         </text>
         <text fg="#6e7681">{props.runtime.root}</text>
       </box>
 
       <box flexGrow={1} flexDirection="row">
-        <box
-            width={24}
-            flexDirection="column"
-            padding={1}
-            border={["right"]}
-            borderColor={focus() === "subjects" ? "#58a6ff" : "#30363d"}
-          >
-            <text fg="#8b949e"><b>NAVIGATE</b></text>
-            <text fg={lens() === "subjects" ? "#f0f6fc" : "#6e7681"}>{lens() === "subjects" ? "›" : " "} H  Home</text>
-            <text fg={lens() === "room" ? "#f0f6fc" : "#6e7681"}>{lens() === "room" ? "›" : " "} R  Room</text>
-            <text fg={lens() === "files" ? "#f0f6fc" : "#6e7681"}>{lens() === "files" ? "›" : " "} F  Files</text>
-            <text fg={lens() === "agents" || lens() === "chat" ? "#f0f6fc" : "#6e7681"}>{lens() === "agents" || lens() === "chat" ? "›" : " "} S  Chats</text>
-            <text fg={lens() === "activity" ? "#f0f6fc" : "#6e7681"}>{lens() === "activity" ? "›" : " "} A  Activity</text>
-            <text> </text>
-            <text fg="#8b949e"><b>CONTEXT</b></text>
-            <text fg="#6e7681">{subjects().length} subjects</text>
-            <text> </text>
-            <For each={subjects().slice(0, 26)}>{(subject, i) => (
-              <text fg={i() === subjectIndex() ? "#f0f6fc" : "#8b949e"}>
-                {i() === subjectIndex() ? "›" : " "} {subject.title.slice(0, 15).padEnd(15)}
-                <span style={{ fg: subject.active ? "#58a6ff" : "#484f58" }}>
-                  {subject.active ? ` ●${subject.active}` : ` ${subject.files}`}
-                </span>
-              </text>
-            )}</For>
-          </box>
+        <ShellSidebar
+          active={lens()}
+          subjects={subjects()}
+          subjectIndex={subjectIndex()}
+          focused={focus() === "subjects"}
+        />
 
         <box flexGrow={1} minWidth={48} flexDirection="column" padding={1} border={["right"]} borderColor="#30363d">
           <Show when={lens() === "subjects"}>
-            <text fg="#f0f6fc"><b>{selectedSubject() || "Workspace"}</b></text>
-            <text fg="#6e7681">CURRENT WORK</text>
-            <text> </text>
+            <box flexDirection="column" flexGrow={1}>
+              <text fg={UI.text}><b>HOME</b> <span style={{ fg: UI.dim }}>· {selectedSubject() || "Workspace"}</span></text>
+              <text fg={UI.dim}>One view of what needs attention and what is moving.</text>
+              <text> </text>
 
-            <Show when={subjectAgents().length} fallback={<text fg="#6e7681">No live AI work in this subject yet.</text>}>
-              <For each={subjectAgents().slice(0, 6)}>{(agent) => (
-                <box flexDirection="column" marginBottom={1}>
-                  <text fg="#c9d1d9">
-                    {STATUS[agent.status] || "·"} <b>{agent.title}</b>
-                  </text>
-                  <text fg="#6e7681">
-                    {"  "}{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}
-                  </text>
+              <box flexDirection="row" height={5}>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={UI.borderStrong}>
+                  <text fg={UI.dim}>CONNECTED</text>
+                  <text fg={UI.text}><b>{connectedAgents().length}</b> agents</text>
                 </box>
-              )}</For>
-            </Show>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={workingAgents().length ? UI.accent : UI.borderStrong}>
+                  <text fg={UI.dim}>WORKING</text>
+                  <text fg={workingAgents().length ? UI.accent : UI.text}><b>{workingAgents().length}</b> active</text>
+                </box>
+                <box flexGrow={1} marginRight={1} paddingLeft={1} border borderStyle="rounded" borderColor={attentionAgents().length ? UI.amber : UI.borderStrong}>
+                  <text fg={UI.dim}>ATTENTION</text>
+                  <text fg={attentionAgents().length ? UI.amber : UI.text}><b>{attentionAgents().length}</b> waiting</text>
+                </box>
+                <box flexGrow={1} paddingLeft={1} border borderStyle="rounded" borderColor={UI.borderStrong}>
+                  <text fg={UI.dim}>CONTEXT</text>
+                  <text fg={UI.text}><b>{allFiles().length}</b> files</text>
+                </box>
+              </box>
 
-            <text> </text>
-            <text fg="#58a6ff"><b>CONTEXT</b></text>
-            <Show when={topContextFiles().length} fallback={<text fg="#6e7681">No relevant files indexed yet.</text>}>
-              <For each={topContextFiles()}>{(item) => (
-                <text fg="#8b949e">
-                  {"  "}□ {item.title.slice(0, 36)}
-                  <span style={{ fg: "#484f58" }}> · {item.reason}</span>
-                </text>
-              )}</For>
-            </Show>
+              <text> </text>
+              <Show when={attentionAgents().length}>
+                <text fg={UI.amber}><b>NEEDS ATTENTION</b></text>
+                <For each={attentionAgents().slice(0, 4)}>{(agent) => (
+                  <box flexDirection="column" paddingLeft={1} marginBottom={1}>
+                    <text fg={UI.textSoft}>{STATUS[agent.status] || "·"} <b>{agent.title}</b></text>
+                    <text fg={UI.dim}>{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}</text>
+                  </box>
+                )}</For>
+                <text> </text>
+              </Show>
 
-            <text> </text>
-            <text fg="#58a6ff"><b>RECENT</b></text>
-            <Show when={subjectEvents().length} fallback={<text fg="#6e7681">No subject activity yet.</text>}>
-              <For each={subjectEvents().slice(0, 5)}>{(event) => (
-                <text fg="#6e7681">{age(event.createdAt).padStart(4)}  {eventLabel(event).slice(0, 58)}</text>
-              )}</For>
-            </Show>
+              <text fg={UI.accent}><b>ACTIVE WORK</b></text>
+              <Show when={subjectAgents().length} fallback={<text fg={UI.dim}>No live AI work in this context.</text>}>
+                <For each={subjectAgents().filter((agent) => agent.status !== "offline").slice(0, 5)}>{(agent) => (
+                  <box flexDirection="column" paddingLeft={1} marginBottom={1}>
+                    <text fg={UI.textSoft}>{STATUS[agent.status] || "·"} <b>{agent.title}</b></text>
+                    <text fg={UI.dim}>{agent.system} · {STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {age(agent.updatedAt)}</text>
+                  </box>
+                )}</For>
+              </Show>
+
+              <text> </text>
+              <box flexDirection="row" flexGrow={1}>
+                <box flexGrow={1} flexDirection="column" marginRight={2}>
+                  <text fg={UI.accent}><b>RELEVANT CONTEXT</b></text>
+                  <Show when={topContextFiles().length} fallback={<text fg={UI.dim}>No context files yet.</text>}>
+                    <For each={topContextFiles().slice(0, 5)}>{(item) => (
+                      <text fg={UI.muted}>□ {item.title.slice(0, 32)} <span style={{ fg: UI.dim }}>· {item.reason}</span></text>
+                    )}</For>
+                  </Show>
+                </box>
+                <box flexGrow={1} flexDirection="column">
+                  <text fg={UI.accent}><b>RECENT ACTIVITY</b></text>
+                  <Show when={subjectEvents().length} fallback={<text fg={UI.dim}>No recent activity.</text>}>
+                    <For each={subjectEvents().slice(0, 5)}>{(event) => (
+                      <text fg={UI.dim}>{age(event.createdAt).padStart(4)}  <span style={{ fg: UI.muted }}>{eventLabel(event).slice(0, 34)}</span></text>
+                    )}</For>
+                  </Show>
+                </box>
+              </box>
+            </box>
           </Show>
 
           <Show when={lens() === "files"}>
@@ -547,9 +692,9 @@ export function App(props: { runtime: UnionRuntime }) {
 
           <Show when={lens() === "room"}>
             <box flexDirection="column" flexGrow={1} minHeight={0}>
-              <text fg="#f0f6fc"><b>ROOM</b> <span style={{ fg: "#8b949e" }}>ChatGPT ↔ DeepSeek</span></text>
+              <text fg="#f0f6fc"><b>ROOM</b> <span style={{ fg: "#8b949e" }}>{roomPairLabel()}</span></text>
               <text fg="#6e7681">
-                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · {roomTurnLimit()} turns · {roomStatus()}
+                {roomFirst() ? "●" : "×"} {roomFirst()?.title || roomFirst()?.system || "Agent 1"}  ↔  {roomSecond() ? "●" : "×"} {roomSecond()?.title || roomSecond()?.system || "Agent 2"} · {roomTurnLimit()} turns · {roomStatus()}
               </text>
               <text> </text>
 
@@ -567,23 +712,17 @@ export function App(props: { runtime: UnionRuntime }) {
                     <box flexDirection="column">
                       <text fg="#8b949e">Type one shared task below.</text>
                       <text fg="#6e7681">Union will carry the conversation between the connected agents automatically.</text>
-                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes the turn limit before starting.</text>
+                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes turns (2–30) · Shift+P toggles the agent pair.</text>
                     </box>
                   }
                 >
                   <For each={roomTurns()}>{(turn) => (
-                    <box
-                      flexDirection="column"
-                      paddingLeft={1}
-                      paddingRight={1}
-                      border={["left"]}
-                      borderColor={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}
-                    >
-                      <text fg={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}>
-                        <b>{turn.system.toUpperCase()}</b> <span style={{ fg: "#6e7681" }}>turn {turn.index}</span>
-                      </text>
-                      <text fg="#c9d1d9">{turn.content}</text>
-                    </box>
+                    <ConversationTurn
+                      label={turn.title || turn.system}
+                      content={turn.content}
+                      tone={turn.system === "DeepSeek" ? "deepseek" : "chatgpt"}
+                      meta={`turn ${turn.index}`}
+                    />
                   )}</For>
                 </Show>
               </scrollbox>
@@ -603,8 +742,10 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused={!roomRunning()}
                   flexGrow={1}
                   maxLength={8000}
-                  placeholder={roomRunning() ? "room is working…" : "Give ChatGPT + DeepSeek one shared task…"}
-                  onSubmit={(value) => void runRoom(value)}
+                  value={roomDraft()}
+                  onInput={(value) => setRoomDraft(value)}
+                  placeholder={roomRunning() ? "room is working…" : `Give ${roomPairLabel()} one shared task…`}
+                  onSubmit={() => void runRoom(roomDraft())}
                 />
               </box>
             </box>
@@ -631,18 +772,11 @@ export function App(props: { runtime: UnionRuntime }) {
               >
                 <Show when={chatMessages().length} fallback={<text fg="#6e7681">No messages synced yet.</text>}>
                   <For each={chatMessages()}>{(message) => (
-                    <box
-                      flexDirection="column"
-                      paddingLeft={1}
-                      paddingRight={1}
-                      border={["left"]}
-                      borderColor={message.role === "user" ? "#3fb950" : "#58a6ff"}
-                    >
-                      <text fg={message.role === "user" ? "#3fb950" : "#58a6ff"}>
-                        <b>{message.role === "user" ? "YOU" : chatEndpoint()?.system?.toUpperCase() || "AI"}</b>
-                      </text>
-                      <text fg="#c9d1d9">{message.content}</text>
-                    </box>
+                    <ConversationTurn
+                      label={message.role === "user" ? "You" : chatEndpoint()?.system || "AI"}
+                      content={message.content}
+                      tone={message.role === "user" ? "user" : chatEndpoint()?.system === "DeepSeek" ? "deepseek" : "chatgpt"}
+                    />
                   )}</For>
                 </Show>
               </scrollbox>
@@ -662,70 +796,39 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused
                   flexGrow={1}
                   maxLength={8000}
+                  value={chatDraft()}
+                  onInput={(value) => setChatDraft(value)}
                   placeholder={busy() ? "sending…" : `Message this ${chatEndpoint()?.system || "AI"} session…`}
-                  onSubmit={(value) => void submitChat(value)}
+                  onSubmit={() => void submitChat(chatDraft())}
                 />
               </box>
             </box>
           </Show>
         </box>
 
-        <box
-          width={42}
-          flexDirection="column"
-          padding={1}
-          borderColor={focus() === "agents" ? "#58a6ff" : "#30363d"}
-        >
-          <text fg="#f0f6fc"><b>AGENTS</b> <span style={{ fg: "#58a6ff" }}>{allAgents().length}</span></text>
-          <text fg="#6e7681">connected conversations</text>
-          <text> </text>
-
-          <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open supported AI tab.</text>}>
-            <For each={allAgents().slice(0, 12)}>{(agent, i) => (
-              <box flexDirection="column" marginBottom={1}>
-                <text fg={i() === agentIndex() ? "#f0f6fc" : "#8b949e"}>
-                  {i() === agentIndex() ? "›" : " "} {STATUS[agent.status] || "·"} <b>{agent.system}</b> {agent.title.slice(0, 23)}
-                </text>
-                <text fg="#484f58">
-                  {"    "}{STATUS_LABEL[agent.status] || agent.status.toUpperCase()} · {agent.subject || "Unsorted"} · {age(agent.updatedAt)}
-                </text>
-              </box>
-            )}</For>
-          </Show>
-
-          <Show when={capture()}>
-            <text> </text>
-            <text fg="#58a6ff"><b>ROUTING BUFFER</b></text>
-            <text fg="#8b949e">{captureSource()}</text>
-            <text fg="#484f58">{capture().length} chars ready</text>
-          </Show>
-
-          <text> </text>
-          <text fg="#58a6ff"><b>RECENT</b></text>
-          <For each={events().slice(0, 5)}>{(event) => (
-            <text fg="#484f58">{age(event.createdAt).padStart(4)} {eventLabel(event).slice(0, 30)}</text>
-          )}</For>
-        </box>
+        <AgentRail
+          agents={allAgents()}
+          selectedId={selectedAgent()?.id}
+          focused={focus() === "agents"}
+          recent={events().slice(0, 5).map((event) => ({ createdAt: event.createdAt, label: eventLabel(event) }))}
+        />
       </box>
 
-      <box height={4} flexDirection="column" paddingLeft={2} paddingRight={2} border={["top"]} borderColor="#30363d">
-        <text fg={busy() ? "#d29922" : "#8b949e"}>
-          {busy() ? "working…" : notice()}
-          <Show when={capture()}>
-            <span style={{ fg: "#58a6ff" }}> · buffer ready</span>
-          </Show>
-        </text>
-        <Show
-          when={lens() === "chat"}
-          fallback={
-            <text fg="#6e7681">
-              H home   R room   F files   S chats   A activity   Tab focus   ↑/↓ move   Enter open   q quit
-            </text>
-          }
-        >
-          <text fg="#6e7681">Enter send · Esc home · Ctrl+C quit</text>
-        </Show>
-      </box>
+      <StatusBar
+        notice={notice()}
+        busy={busy()}
+        connected={connectedAgents().length}
+        working={workingAgents().length}
+        bufferReady={Boolean(capture())}
+        chatMode={lens() === "chat" || lens() === "room"}
+      />
+
+      <Show when={overlay() === "commands"}>
+        <CommandPalette commands={paletteCommands()} onRun={runPaletteCommand} onClose={closeOverlay} />
+      </Show>
+      <Show when={overlay() === "help"}>
+        <HelpOverlay onClose={closeOverlay} />
+      </Show>
     </box>
   )
 }

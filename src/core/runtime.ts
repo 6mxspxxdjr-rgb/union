@@ -98,7 +98,7 @@ export class UnionRuntime {
         Boolean(nextState.lastAssistant)
 
       const completedWithoutStreaming =
-        Boolean(previousState) &&
+        previousState !== undefined &&
         !previousState.generating &&
         !nextState.generating &&
         previousState.lastAssistant !== nextState.lastAssistant &&
@@ -245,7 +245,7 @@ export class UnionRuntime {
     if (!cleanTask) throw new Error("Room task cannot be empty")
     if (first.id === second.id) throw new Error("Room requires two different agents")
 
-    const turns = Math.max(2, Math.min(options.turns ?? 4, 12))
+    const turns = Math.max(2, Math.min(options.turns ?? 4, 30))
     const transcript: RoomTurn[] = []
     let partnerResponse = ""
 
@@ -261,7 +261,7 @@ export class UnionRuntime {
             "SHARED TASK:",
             cleanTask,
             "",
-            `Your partner is ${partner.system}. Work on the task now. Your response will be relayed verbatim to your partner.`,
+            `Your partner is ${partner.system} session "${partner.title}". Work on the task now. Your response will be relayed verbatim to that partner session.`,
             "Move the work forward with concrete reasoning, useful output, questions, or a proposed solution. Do not merely describe the collaboration."
           ].join("\n")
         : [
@@ -270,10 +270,10 @@ export class UnionRuntime {
             "ORIGINAL SHARED TASK:",
             cleanTask,
             "",
-            `MESSAGE FROM ${partner.system}:`,
+            `MESSAGE FROM ${partner.system} SESSION "${partner.title}":`,
             partnerResponse,
             "",
-            `Continue the work as ${agent.system}. Critique, improve, answer, revise, or extend your partner's contribution.`,
+            `Continue the work as ${agent.system} session "${agent.title}". Critique, improve, answer, revise, or extend your partner's contribution.`,
             "Your response will be relayed back to your partner, so make substantive progress rather than simply agreeing."
           ].join("\n")
 
