@@ -31,7 +31,7 @@ export function HelpOverlay(props: { onClose: () => void }) {
 
       <text fg={UI.accent}><b>ROOM</b></text>
       <text fg={UI.textSoft}>[ / ]           decrease / increase turns (2–30)</text>
-      <text fg={UI.textSoft}>Shift+P         choose ChatGPT↔ChatGPT or ChatGPT↔DeepSeek</text>
+      <text fg={UI.textSoft}>Shift+P         toggle ChatGPT↔ChatGPT / ChatGPT↔DeepSeek</text>
       <text fg={UI.textSoft}>Enter           start the shared task</text>
       <text> </text>
 
