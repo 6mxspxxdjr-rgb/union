@@ -69,6 +69,8 @@ export function App(props: { runtime: UnionRuntime }) {
   const [fileIndex, setFileIndex] = createSignal(0)
   const [agentIndex, setAgentIndex] = createSignal(0)
   const [chatEndpointId, setChatEndpointId] = createSignal<string>()
+  const [chatDraft, setChatDraft] = createSignal("")
+  const [roomDraft, setRoomDraft] = createSignal("")
   const [roomTurns, setRoomTurns] = createSignal<RoomTurn[]>([])
   const [roomTurnLimit, setRoomTurnLimit] = createSignal(4)
   const [roomPairMode, setRoomPairMode] = createSignal<"chatgpt-deepseek" | "chatgpt-chatgpt">("chatgpt-deepseek")
@@ -337,6 +339,7 @@ export function App(props: { runtime: UnionRuntime }) {
     setNotice(`sending → ${endpoint.title}`)
     try {
       await props.runtime.send(endpoint, text, true)
+      setChatDraft("")
       if (chatInput) chatInput.value = ""
       await props.runtime.syncThread(endpoint).catch(() => {})
       setTick((v) => v + 1)
@@ -370,6 +373,7 @@ export function App(props: { runtime: UnionRuntime }) {
     setNotice(`Room started · ${roomPairLabel()}`)
 
     try {
+      setRoomDraft("")
       if (roomInput) roomInput.value = ""
       await props.runtime.runTwoAgentRoom(task, first, second, {
         turns: turnLimit,
@@ -738,10 +742,10 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused={!roomRunning()}
                   flexGrow={1}
                   maxLength={8000}
+                  value={roomDraft()}
+                  onInput={(value) => setRoomDraft(value)}
                   placeholder={roomRunning() ? "room is working…" : `Give ${roomPairLabel()} one shared task…`}
-                  onSubmit={(value) => {
-                    if (typeof value === "string") void runRoom(value)
-                  }}
+                  onSubmit={() => void runRoom(roomDraft())}
                 />
               </box>
             </box>
@@ -792,10 +796,10 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused
                   flexGrow={1}
                   maxLength={8000}
+                  value={chatDraft()}
+                  onInput={(value) => setChatDraft(value)}
                   placeholder={busy() ? "sending…" : `Message this ${chatEndpoint()?.system || "AI"} session…`}
-                  onSubmit={(value) => {
-                    if (typeof value === "string") void submitChat(value)
-                  }}
+                  onSubmit={() => void submitChat(chatDraft())}
                 />
               </box>
             </box>
