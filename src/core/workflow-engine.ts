@@ -460,7 +460,7 @@ export class WorkflowEngine {
   }
 
   private mergeStateEnvelope(packet: ContextPacket, response: string) {
-    const match = response.match(/<UNION_STATE>\\s*([\\s\\S]*?)\\s*<\\/UNION_STATE>/i)
+    const match = response.match(/<UNION_STATE>\s*([\s\S]*?)\s*<\/UNION_STATE>/i)
     if (!match) {
       return {
         payload: response.trim(),
