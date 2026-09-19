@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { existsSync, readFileSync } from "node:fs"
 import { extname, resolve } from "node:path"
-import { WebSocketServer, type WebSocket } from "ws"
+import { WebSocketServer, WebSocket } from "ws"
 import type { UnionRuntime } from "../core/runtime"
 import type { WorkflowEngine } from "../core/workflow-engine"
 import type { WorkflowDefinition } from "../core/workflow"
@@ -205,7 +205,7 @@ export class DashboardServer {
   private broadcast(message: DashboardMessage) {
     const payload = JSON.stringify(message)
     for (const socket of this.sockets) {
-      if (socket.readyState === socket.OPEN) socket.send(payload)
+      if (socket.readyState === WebSocket.OPEN) socket.send(payload)
     }
   }
 
