@@ -71,6 +71,7 @@ export function App(props: { runtime: UnionRuntime }) {
   const [chatEndpointId, setChatEndpointId] = createSignal<string>()
   const [roomTurns, setRoomTurns] = createSignal<RoomTurn[]>([])
   const [roomTurnLimit, setRoomTurnLimit] = createSignal(4)
+  const [roomPairMode, setRoomPairMode] = createSignal<"chatgpt-deepseek" | "chatgpt-chatgpt">("chatgpt-deepseek")
   const [roomRunning, setRoomRunning] = createSignal(false)
   const [roomStatus, setRoomStatus] = createSignal("ready")
   const [notice, setNotice] = createSignal("ready")
@@ -150,13 +151,32 @@ export function App(props: { runtime: UnionRuntime }) {
     return props.runtime.endpoints()
   })
 
-  const roomChatGPT = createMemo(() =>
-    allAgents().find((endpoint) => endpoint.system === "ChatGPT" && endpoint.status !== "offline")
+  const connectedChatGPT = createMemo(() =>
+    allAgents().filter((endpoint) => endpoint.system === "ChatGPT" && endpoint.status !== "offline")
   )
 
-  const roomDeepSeek = createMemo(() =>
-    allAgents().find((endpoint) => endpoint.system === "DeepSeek" && endpoint.status !== "offline")
+  const connectedDeepSeek = createMemo(() =>
+    allAgents().filter((endpoint) => endpoint.system === "DeepSeek" && endpoint.status !== "offline")
   )
+
+  const roomPair = createMemo<[Endpoint | undefined, Endpoint | undefined]>(() => {
+    if (roomPairMode() === "chatgpt-chatgpt") {
+      return [connectedChatGPT()[0], connectedChatGPT()[1]]
+    }
+    return [connectedChatGPT()[0], connectedDeepSeek()[0]]
+  })
+
+  const roomFirst = createMemo(() => roomPair()[0])
+  const roomSecond = createMemo(() => roomPair()[1])
+
+  const roomPairLabel = createMemo(() => {
+    const first = roomFirst()
+    const second = roomSecond()
+    if (!first || !second) {
+      return roomPairMode() === "chatgpt-chatgpt" ? "ChatGPT ↔ ChatGPT" : "ChatGPT ↔ DeepSeek"
+    }
+    return `${first.system} ↔ ${second.system}`
+  })
 
   const subjectAgents = createMemo(() =>
     allAgents().filter((endpoint) => !selectedSubject() || endpoint.subject === selectedSubject())
@@ -209,7 +229,9 @@ export function App(props: { runtime: UnionRuntime }) {
 
   const paletteCommands = createMemo<PaletteCommand[]>(() => [
     { id: "home", label: "Home", description: "Open workspace overview", hint: "H", keywords: ["overview", "dashboard"] },
-    { id: "room", label: "Room", description: "Open ChatGPT ↔ DeepSeek collaboration", hint: "R", keywords: ["agents", "collaborate"] },
+    { id: "room", label: "Room", description: "Open multi-agent collaboration", hint: "R", keywords: ["agents", "collaborate"] },
+    { id: "room-pair-gpt-gpt", label: "Room pair: ChatGPT ↔ ChatGPT", description: "Use two connected ChatGPT sessions", keywords: ["room", "pair", "chatgpt"] },
+    { id: "room-pair-gpt-deepseek", label: "Room pair: ChatGPT ↔ DeepSeek", description: "Use one ChatGPT and one DeepSeek session", keywords: ["room", "pair", "deepseek"] },
     { id: "chats", label: "Chats", description: "Browse connected AI conversations", hint: "S", keywords: ["agents", "sessions"] },
     { id: "files", label: "Files", description: "Browse indexed workspace files", hint: "F" },
     { id: "activity", label: "Activity", description: "Open Union event timeline", hint: "A", keywords: ["events", "log"] },
@@ -243,6 +265,14 @@ export function App(props: { runtime: UnionRuntime }) {
     else if (id === "chats") { setLens("agents"); setFocus("agents") }
     else if (id === "files") { setLens("files"); setFocus("files") }
     else if (id === "activity") { setLens("activity"); setFocus("subjects") }
+    else if (id === "room-pair-gpt-gpt") {
+      setRoomPairMode("chatgpt-chatgpt")
+      setNotice("Room pair · ChatGPT ↔ ChatGPT")
+    }
+    else if (id === "room-pair-gpt-deepseek") {
+      setRoomPairMode("chatgpt-deepseek")
+      setNotice("Room pair · ChatGPT ↔ DeepSeek")
+    }
     else if (id === "open-browser") {
       const agent = selectedAgent()
       if (agent?.url) {
@@ -321,30 +351,35 @@ export function App(props: { runtime: UnionRuntime }) {
 
   async function runRoom(value: string) {
     const task = value.trim()
-    const chatgpt = roomChatGPT()
-    const deepseek = roomDeepSeek()
+    const first = roomFirst()
+    const second = roomSecond()
     if (!task || roomRunning()) return
-    if (!chatgpt || !deepseek) {
-      setNotice("Room needs one connected ChatGPT tab and one connected DeepSeek tab")
+    if (!first || !second) {
+      setNotice(
+        roomPairMode() === "chatgpt-chatgpt"
+          ? "Room needs two connected ChatGPT tabs"
+          : "Room needs one connected ChatGPT tab and one connected DeepSeek tab"
+      )
       return
     }
 
     const turnLimit = roomTurnLimit()
     setRoomTurns([])
     setRoomRunning(true)
-    setRoomStatus(`turn 1/${turnLimit} · ChatGPT working`)
-    setNotice("Room started · ChatGPT ↔ DeepSeek")
+    setRoomStatus(`turn 1/${turnLimit} · ${first.title || first.system} working`)
+    setNotice(`Room started · ${roomPairLabel()}`)
 
     try {
       if (roomInput) roomInput.value = ""
-      await props.runtime.runTwoAgentRoom(task, chatgpt, deepseek, {
+      await props.runtime.runTwoAgentRoom(task, first, second, {
         turns: turnLimit,
         onTurn: (turn) => {
           setRoomTurns((current) => [...current, turn])
           const next = turn.index + 1
+          const nextAgent = next % 2 === 1 ? first : second
           setRoomStatus(
             next <= turnLimit
-              ? `turn ${next}/${turnLimit} · ${next % 2 === 1 ? "ChatGPT" : "DeepSeek"} working`
+              ? `turn ${next}/${turnLimit} · ${nextAgent.title || nextAgent.system} working`
               : `completed · ${turnLimit}/${turnLimit} turns`,
           )
           setTick((v) => v + 1)
@@ -447,7 +482,7 @@ export function App(props: { runtime: UnionRuntime }) {
       if (!roomRunning() && (key.name === "]" || key.sequence === "]")) {
         key.preventDefault()
         key.stopPropagation()
-        setRoomTurnLimit((current) => Math.min(12, current + 1))
+        setRoomTurnLimit((current) => Math.min(30, current + 1))
         setRoomStatus("ready")
         return
       }
@@ -639,9 +674,9 @@ export function App(props: { runtime: UnionRuntime }) {
 
           <Show when={lens() === "room"}>
             <box flexDirection="column" flexGrow={1} minHeight={0}>
-              <text fg="#f0f6fc"><b>ROOM</b> <span style={{ fg: "#8b949e" }}>ChatGPT ↔ DeepSeek</span></text>
+              <text fg="#f0f6fc"><b>ROOM</b> <span style={{ fg: "#8b949e" }}>{roomPairLabel()}</span></text>
               <text fg="#6e7681">
-                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · {roomTurnLimit()} turns · {roomStatus()}
+                {roomFirst() ? "●" : "×"} {roomFirst()?.title || roomFirst()?.system || "Agent 1"}  ↔  {roomSecond() ? "●" : "×"} {roomSecond()?.title || roomSecond()?.system || "Agent 2"} · {roomTurnLimit()} turns · {roomStatus()}
               </text>
               <text> </text>
 
@@ -659,13 +694,13 @@ export function App(props: { runtime: UnionRuntime }) {
                     <box flexDirection="column">
                       <text fg="#8b949e">Type one shared task below.</text>
                       <text fg="#6e7681">Union will carry the conversation between the connected agents automatically.</text>
-                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes the turn limit before starting.</text>
+                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes turns (2–30) · Ctrl+P changes the agent pair.</text>
                     </box>
                   }
                 >
                   <For each={roomTurns()}>{(turn) => (
                     <ConversationTurn
-                      label={turn.system}
+                      label={turn.title || turn.system}
                       content={turn.content}
                       tone={turn.system === "DeepSeek" ? "deepseek" : "chatgpt"}
                       meta={`turn ${turn.index}`}
@@ -689,7 +724,7 @@ export function App(props: { runtime: UnionRuntime }) {
                   focused={!roomRunning()}
                   flexGrow={1}
                   maxLength={8000}
-                  placeholder={roomRunning() ? "room is working…" : "Give ChatGPT + DeepSeek one shared task…"}
+                  placeholder={roomRunning() ? "room is working…" : `Give ${roomPairLabel()} one shared task…`}
                   onSubmit={(value) => {
                     if (typeof value === "string") void runRoom(value)
                   }}
