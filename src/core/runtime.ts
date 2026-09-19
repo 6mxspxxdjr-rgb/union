@@ -183,10 +183,10 @@ export class UnionRuntime {
     return []
   }
 
-  async send(endpoint: Endpoint, content: string, submit = false) {
+  async send(endpoint: Endpoint, content: string, submit = false, syncAfterSubmit = true) {
     await this.adapters.send(endpoint, content, submit)
     this.events.emit("message.sent", { chars: content.length, submit }, { objectId: endpoint.id, subject: endpoint.subject })
-    if (submit) {
+    if (submit && syncAfterSubmit) {
       await new Promise((resolve) => setTimeout(resolve, 180))
       await this.syncThread(endpoint).catch(() => {})
     }
@@ -207,10 +207,14 @@ export class UnionRuntime {
       await new Promise((resolve) => setTimeout(resolve, 220))
       polls += 1
 
-      // Browser push is primary. Periodic explicit reads are only a fallback.
-      if (polls % 18 === 0) await this.syncThread(endpoint).catch(() => {})
+      // Browser push is primary. The fallback reads only the latest answer,
+      // never the whole thread, so room latency does not grow with history.
+      let latest = this.latestAssistantContent(endpoint.id)
+      if (polls % 8 === 0) {
+        const direct = await this.adapters.readLatest(endpoint).catch(() => "")
+        if (direct) latest = direct
+      }
 
-      const latest = this.latestAssistantContent(endpoint.id)
       if (!latest || latest === previousContent) continue
 
       if (latest !== candidate) {
@@ -226,7 +230,19 @@ export class UnionRuntime {
       // remained unchanged for several seconds is safe to relay even if the
       // status signal failed to flip back to waiting.
       const deepSeekStableFallback = endpoint.system === "DeepSeek" && stableFor >= 6500
-      if (providerSettled || deepSeekStableFallback) return candidate
+      if (providerSettled || deepSeekStableFallback) {
+        if (this.latestAssistantContent(endpoint.id) !== candidate) {
+          this.db.addMessage({
+            id: stableId("msg", `${endpoint.id}:latest:${candidate}`),
+            endpointId: endpoint.id,
+            role: "assistant",
+            content: candidate,
+            createdAt: Date.now(),
+            metadata: { directLatest: true },
+          })
+        }
+        return candidate
+      }
     }
 
     throw new Error(`Timed out waiting for ${endpoint.system} response`)
@@ -283,7 +299,10 @@ export class UnionRuntime {
         { objectId: agent.id, subject: "Rooms" },
       )
 
-      await this.send(agent, prompt, true)
+      // Room execution owns its relay transcript. Avoid a full thread sync
+      // after every submit; completion is tracked through lightweight pushes
+      // plus readLatest() fallback reads.
+      await this.send(agent, prompt, true, false)
       const content = await this.waitForAssistantReply(agent, before)
 
       const turn: RoomTurn = {
