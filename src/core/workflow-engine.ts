@@ -160,7 +160,15 @@ export class WorkflowEngine {
         if (source) await this.handshake(source, node, incoming, current, ctx)
       }
 
-      current = await this.executeNode(node, current, ctx, module.id, cycle, current.trace.length + 1)
+      current = await this.executeNode(
+        node,
+        current,
+        ctx,
+        module.id,
+        cycle,
+        current.trace.length + 1,
+        incoming?.contract,
+      )
       executed.add(node.id)
     }
 
@@ -183,6 +191,7 @@ export class WorkflowEngine {
       const node = workers[(turn - 1) % workers.length]
       const previous = turn > 1 ? workers[(turn - 2) % workers.length] : undefined
 
+      let contract: ContextContract | undefined
       if (previous) {
         const edge =
           module.edges.find((item) => item.from === previous.id && item.to === node.id) ??
@@ -193,11 +202,12 @@ export class WorkflowEngine {
             to: node.id,
             contract: { handshake: "deterministic" as HandshakeMode },
           }
+        contract = edge.contract
         await this.handshake(previous, node, edge, current, ctx)
       }
 
       ctx.run.currentTurn = turn
-      current = await this.executeNode(node, current, ctx, module.id, cycle, turn)
+      current = await this.executeNode(node, current, ctx, module.id, cycle, turn, contract)
     }
 
     return current
@@ -228,6 +238,7 @@ export class WorkflowEngine {
     moduleId: string,
     cycle: number,
     turn: number,
+    contract?: ContextContract,
   ): Promise<ContextPacket> {
     if (node.enabled === false) return packet
     ctx.run.currentNodeId = node.id
@@ -247,7 +258,7 @@ export class WorkflowEngine {
 
     let next = packet
     if (node.kind === "agent") {
-      next = await this.executeAgent(node, packet, ctx, moduleId, cycle, turn)
+      next = await this.executeAgent(node, packet, ctx, moduleId, cycle, turn, contract)
     } else if (node.kind === "module") {
       if (!node.module?.moduleId) throw new Error(`Module node ${node.label} has no moduleId`)
       next = await this.executeModule(node.module.moduleId, packet, ctx)
@@ -275,10 +286,11 @@ export class WorkflowEngine {
     moduleId: string,
     cycle: number,
     turn: number,
+    contract?: ContextContract,
   ): Promise<ContextPacket> {
     const endpoint = this.endpointFor(node)
     const before = await this.runtime.adapters.readLatest(endpoint).catch(() => "")
-    const prompt = this.agentPrompt(node, packet, moduleId, cycle, turn)
+    const prompt = this.agentPrompt(node, packet, moduleId, cycle, turn, contract)
 
     await this.runtime.send(endpoint, prompt, true, false)
     const response = await this.runtime.waitForAssistantReply(endpoint, before)
@@ -373,14 +385,21 @@ export class WorkflowEngine {
     }
   }
 
-  private agentPrompt(node: WorkflowNode, packet: ContextPacket, moduleId: string, cycle: number, turn: number) {
-    const include = new Set<NonNullable<ContextContract["include"]>[number]>([
-      "payload",
-      "shared_state",
-      "protocol",
-      "artifacts",
-    ])
-    const payload = packet.payload
+  private agentPrompt(
+    node: WorkflowNode,
+    packet: ContextPacket,
+    moduleId: string,
+    cycle: number,
+    turn: number,
+    contract?: ContextContract,
+  ) {
+    const include = new Set<NonNullable<ContextContract["include"]>[number]>(
+      contract?.include ?? ["payload", "shared_state", "protocol", "artifacts"],
+    )
+    const maxChars = Math.max(0, contract?.maxChars ?? 0)
+    const payload = include.has("payload")
+      ? (maxChars > 0 ? packet.payload.slice(-maxChars) : packet.payload)
+      : ""
 
     const sections = [
       "You are an AI worker inside a Union context-production workflow.",
@@ -416,7 +435,7 @@ export class WorkflowEngine {
       sections.push("ARTIFACTS", JSON.stringify(packet.artifacts), "")
     }
 
-    sections.push(
+    if (include.has("payload")) sections.push(
       "INCOMING CONTEXT",
       payload,
       "",
