@@ -197,14 +197,16 @@ export class UnionRuntime {
     return [...messages].reverse().find((message) => message.role === "assistant")?.content.trim() ?? ""
   }
 
-  async waitForAssistantReply(endpoint: Endpoint, previousContent: string, timeoutMs = 180_000) {
+  async waitForAssistantReply(endpoint: Endpoint, previousContent: string, timeoutMs = 180_000, signal?: AbortSignal) {
     const deadline = Date.now() + timeoutMs
     let candidate = ""
     let stableSince = 0
     let polls = 0
 
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new Error("Room run stopped")
       await new Promise((resolve) => setTimeout(resolve, 220))
+      if (signal?.aborted) throw new Error("Room run stopped")
       polls += 1
 
       // Browser push is primary. Periodic explicit reads are only a fallback.
@@ -238,6 +240,7 @@ export class UnionRuntime {
     second: Endpoint,
     options: {
       turns?: number
+      signal?: AbortSignal
       onTurn?: (turn: RoomTurn) => void
     } = {},
   ) {
@@ -250,8 +253,11 @@ export class UnionRuntime {
     let partnerResponse = ""
 
     for (let index = 0; index < turns; index += 1) {
+      if (options.signal?.aborted) throw new Error("Room run stopped")
       const agent = index % 2 === 0 ? first : second
       const partner = index % 2 === 0 ? second : first
+      const agentLabel = `${agent.system} session "${agent.title}"`
+      const partnerLabel = `${partner.system} session "${partner.title}"`
       const before = this.latestAssistantContent(agent.id)
 
       const prompt = index === 0
@@ -261,7 +267,7 @@ export class UnionRuntime {
             "SHARED TASK:",
             cleanTask,
             "",
-            `Your partner is ${partner.system}. Work on the task now. Your response will be relayed verbatim to your partner.`,
+            `You are the ${agentLabel}. Your partner is the ${partnerLabel}. Work on the task now. Your response will be relayed verbatim to that partner session.`,
             "Move the work forward with concrete reasoning, useful output, questions, or a proposed solution. Do not merely describe the collaboration."
           ].join("\n")
         : [
@@ -270,10 +276,10 @@ export class UnionRuntime {
             "ORIGINAL SHARED TASK:",
             cleanTask,
             "",
-            `MESSAGE FROM ${partner.system}:`,
+            `MESSAGE FROM ${partnerLabel}:`,
             partnerResponse,
             "",
-            `Continue the work as ${agent.system}. Critique, improve, answer, revise, or extend your partner's contribution.`,
+            `Continue the work as the ${agentLabel}. Critique, improve, answer, revise, or extend your partner's contribution.`,
             "Your response will be relayed back to your partner, so make substantive progress rather than simply agreeing."
           ].join("\n")
 
@@ -284,7 +290,7 @@ export class UnionRuntime {
       )
 
       await this.send(agent, prompt, true)
-      const content = await this.waitForAssistantReply(agent, before)
+      const content = await this.waitForAssistantReply(agent, before, 180_000, options.signal)
 
       const turn: RoomTurn = {
         index: index + 1,
