@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNION — Context Production Control Plane</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">UNION<span>CONTEXT PRODUCTION</span></div>
+
+      <nav class="nav">
+        <button class="nav-item active">⌂ <span>Orchestration</span></button>
+        <button class="nav-item">◫ <span>Modules</span></button>
+        <button class="nav-item">◉ <span>Agents</span></button>
+        <button class="nav-item">◇ <span>Runs</span></button>
+        <button class="nav-item">▤ <span>Context</span></button>
+      </nav>
+
+      <div class="agent-palette">
+        <div class="section-label">CONNECTED AGENTS</div>
+        <div id="endpointList" class="endpoint-list"></div>
+      </div>
+
+      <div class="infra-card">
+        <div class="infra-line"><span class="live-dot"></span><b>Local runtime</b></div>
+        <small>Browser-backed models remain in their existing subscriptions. Union coordinates context between them.</small>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <div class="crumb">Rooms / <b>Context Production Line</b></div>
+      <div class="top-spacer"></div>
+      <div id="connectionPill" class="connection-pill"><span class="live-dot"></span>Dashboard connected</div>
+      <button id="saveBtn" class="ghost-btn">Save locally</button>
+    </header>
+
+    <main class="workspace">
+      <section class="room-head">
+        <div>
+          <div class="eyebrow">LIVE ORCHESTRATION</div>
+          <h1>Context Production Line</h1>
+          <p>Problems enter as versioned context packets. Agents and modules transform them stage by stage.</p>
+        </div>
+        <div class="room-actions">
+          <label>Pipeline cycles
+            <input id="rootCycles" type="number" min="1" max="50" value="1" />
+          </label>
+          <button id="runBtn" class="run-btn">▶ Run workflow</button>
+          <button id="stopBtn" class="stop-btn">■</button>
+        </div>
+      </section>
+
+      <section class="canvas-card">
+        <div class="canvas-toolbar">
+          <div>
+            <b>Production Graph</b>
+            <span id="graphStatus" class="mini-pill">ready</span>
+          </div>
+          <div class="toolbar-actions">
+            <button id="addContextBtn" class="tool-btn">＋ Context</button>
+            <button id="addLoopBtn" class="tool-btn accent">＋ Pair Loop</button>
+            <button id="clearBtn" class="tool-btn">Clear</button>
+          </div>
+        </div>
+
+        <div id="graphSurface" class="graph-surface">
+          <svg id="edgeLayer" class="edge-layer" aria-hidden="true">
+            <defs>
+              <filter id="edgeGlow" x="-70%" y="-70%" width="240%" height="240%">
+                <feGaussianBlur stdDeviation="3" result="blur"/>
+                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <linearGradient id="blueEdge" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#35d6ff"/>
+                <stop offset="1" stop-color="#2e72ff"/>
+              </linearGradient>
+              <linearGradient id="violetEdge" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#6e77ff"/>
+                <stop offset="1" stop-color="#c45dff"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div id="nodesLayer" class="nodes-layer"></div>
+          <div id="handshakeToast" class="handshake-toast">
+            <span class="pulse"></span>
+            <div><b>Context handshake</b><span id="handshakeText">aligned</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="bottom-grid">
+        <div class="panel task-panel">
+          <div class="panel-head"><b>Problem input</b><span>Context₀</span></div>
+          <textarea id="taskInput" placeholder="Describe the problem or assignment that should enter the production line..."></textarea>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><b>Live run</b><span id="runBadge">idle</span></div>
+          <div class="metric-grid">
+            <div><small>Status</small><strong id="metricStatus">Idle</strong></div>
+            <div><small>Context version</small><strong id="metricVersion">v0</strong></div>
+            <div><small>Cycle / turn</small><strong id="metricLoop">—</strong></div>
+            <div><small>Payload</small><strong id="metricChars">0 chars</strong></div>
+          </div>
+        </div>
+
+        <div class="panel timeline-panel">
+          <div class="panel-head"><b>Activity</b><span>live</span></div>
+          <div id="activityList" class="activity-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="inspector">
+      <div class="inspect-tabs">
+        <button class="active">Inspector</button>
+        <button>Context</button>
+        <button>Protocol</button>
+      </div>
+
+      <div id="inspectorEmpty" class="inspector-empty">
+        <div class="inspect-orb">◎</div>
+        <h3>Select a node</h3>
+        <p>Configure its endpoint, role, execution policy, or context behavior.</p>
+      </div>
+
+      <div id="nodeInspector" class="node-inspector hidden">
+        <div class="inspect-title">
+          <div id="inspectIcon" class="inspect-icon">◎</div>
+          <div>
+            <div class="eyebrow" id="inspectKind">AGENT</div>
+            <h2 id="inspectLabel">Node</h2>
+          </div>
+          <span id="inspectStatus" class="status-chip">waiting</span>
+        </div>
+
+        <label class="field">Label
+          <input id="fieldLabel" type="text" />
+        </label>
+
+        <div id="agentFields" class="field-group hidden">
+          <label class="field">Browser endpoint
+            <select id="fieldEndpoint"></select>
+          </label>
+          <label class="field">Role
+            <input id="fieldRole" type="text" placeholder="Critic, researcher, developer..." />
+          </label>
+          <label class="field">Instructions
+            <textarea id="fieldInstructions" rows="6"></textarea>
+          </label>
+          <label class="field">Output schema
+            <input id="fieldOutputSchema" type="text" placeholder="proposal.v1" />
+          </label>
+        </div>
+
+        <div id="moduleFields" class="field-group hidden">
+          <div class="module-explain">This node is a reusable two-agent ping-pong module. The whole module behaves like one production-line machine.</div>
+          <label class="field">Agent A
+            <select id="moduleAgentA"></select>
+          </label>
+          <label class="field">Agent B
+            <select id="moduleAgentB"></select>
+          </label>
+          <label class="field">Ping-pong turns
+            <input id="moduleTurns" type="number" min="2" max="100" value="5" />
+          </label>
+        </div>
+
+        <div id="contextFields" class="field-group hidden">
+          <label class="field">Context behavior
+            <select id="contextMode">
+              <option value="passthrough">Pass through</option>
+              <option value="checkpoint">Checkpoint</option>
+              <option value="memory">Memory</option>
+            </select>
+          </label>
+        </div>
+
+        <button id="deleteNodeBtn" class="danger-btn">Delete node</button>
+      </div>
+
+      <div class="context-contract-card">
+        <div class="panel-head"><b>Default edge contract</b><span>v1</span></div>
+        <div class="contract-row"><span>Handshake</span><b>Deterministic</b></div>
+        <div class="contract-row"><span>Payload</span><b>Included</b></div>
+        <div class="contract-row"><span>Shared state</span><b>Included</b></div>
+        <div class="contract-row"><span>Protocol</span><b>Included</b></div>
+        <div class="contract-row"><span>Artifacts</span><b>Included</b></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
