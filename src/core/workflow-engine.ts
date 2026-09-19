@@ -294,11 +294,14 @@ export class WorkflowEngine {
 
     await this.runtime.send(endpoint, prompt, true, false)
     const response = await this.runtime.waitForAssistantReply(endpoint, before)
+    const merged = this.mergeStateEnvelope(packet, response)
 
     return {
       ...packet,
       stateVersion: packet.stateVersion + 1,
-      payload: response,
+      payload: merged.payload,
+      sharedState: merged.sharedState,
+      protocol: merged.protocol,
       loop: { moduleId, cycle, turn },
       trace: [
         ...packet.trace,
@@ -307,7 +310,7 @@ export class WorkflowEngine {
           moduleId,
           stateVersion: packet.stateVersion + 1,
           at: Date.now(),
-          chars: response.length,
+          chars: merged.payload.length,
         },
       ].slice(-200),
     }
@@ -444,9 +447,77 @@ export class WorkflowEngine {
         ? `Produce output compatible with: ${node.agent.outputSchema}`
         : "Return the improved work product that should move to the next node.",
       "Do not describe the orchestration mechanics unless they are directly relevant to the task.",
+      "",
+      "OPTIONAL UNION STATE UPDATE",
+      "If this turn establishes durable shared state or a reusable shorthand definition, append exactly one block:",
+      "<UNION_STATE>",
+      '{"protocol":{"@CODE":"definition"},"facts":[],"decisions":[],"openQuestions":[],"risks":[],"nextActions":[]}',
+      "</UNION_STATE>",
+      "Only include genuinely reusable updates. The block is machine-readable and will be removed before the work product is relayed.",
     )
 
     return sections.join("\n")
+  }
+
+  private mergeStateEnvelope(packet: ContextPacket, response: string) {
+    const match = response.match(/<UNION_STATE>\\s*([\\s\\S]*?)\\s*<\\/UNION_STATE>/i)
+    if (!match) {
+      return {
+        payload: response.trim(),
+        sharedState: packet.sharedState,
+        protocol: packet.protocol,
+      }
+    }
+
+    let update: any = {}
+    try {
+      update = JSON.parse(match[1])
+    } catch {
+      return {
+        payload: response.replace(match[0], "").trim(),
+        sharedState: packet.sharedState,
+        protocol: packet.protocol,
+      }
+    }
+
+    const mergeList = (current: string[], incoming: unknown) => {
+      const values = Array.isArray(incoming)
+        ? incoming.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : []
+      return [...new Set([...current, ...values])].slice(-100)
+    }
+
+    const incomingProtocol =
+      update.protocol && typeof update.protocol === "object" && !Array.isArray(update.protocol)
+        ? Object.fromEntries(
+            Object.entries(update.protocol)
+              .filter(([key, value]) => key.trim() && typeof value === "string" && value.trim())
+              .map(([key, value]) => [key.trim(), String(value).trim()]),
+          )
+        : {}
+
+    const protocolChanged = Object.keys(incomingProtocol).some(
+      (key) => packet.protocol.symbols[key] !== incomingProtocol[key],
+    )
+
+    return {
+      payload: response.replace(match[0], "").trim(),
+      sharedState: {
+        ...packet.sharedState,
+        facts: mergeList(packet.sharedState.facts, update.facts),
+        decisions: mergeList(packet.sharedState.decisions, update.decisions),
+        openQuestions: mergeList(packet.sharedState.openQuestions, update.openQuestions),
+        risks: mergeList(packet.sharedState.risks, update.risks),
+        nextActions: mergeList(packet.sharedState.nextActions, update.nextActions),
+      },
+      protocol: {
+        version: protocolChanged ? packet.protocol.version + 1 : packet.protocol.version,
+        symbols: {
+          ...packet.protocol.symbols,
+          ...incomingProtocol,
+        },
+      },
+    }
   }
 
   private endpointFor(node: WorkflowNode): Endpoint {
