@@ -103,6 +103,25 @@ Union keeps derived local state at:
 ~/.union/union.db
 ```
 
+## Web control plane alpha
+
+Starting Union now also starts a localhost dashboard on:
+
+```text
+http://127.0.0.1:7332
+```
+
+The dashboard uses the same live browser endpoints as the TUI. Open ChatGPT and/or DeepSeek conversations with the Union browser bridge loaded, then open the dashboard. Each conversation becomes a draggable node.
+
+- drag the right plug of one session into the left plug of another to create a room
+- the source node speaks first
+- ChatGPT ↔ DeepSeek, ChatGPT ↔ ChatGPT, and DeepSeek ↔ DeepSeek are all supported
+- select the connection, enter a shared task, choose 2–12 turns, and run it
+- live completed turns appear in the inspector
+- one browser session can participate in only one actively running room at a time
+- use `UNION_DASHBOARD_PORT` to change the default dashboard port
+
+
 The first run scans the selected root while excluding common heavy/system directories such as `.git`, `node_modules`, build outputs and macOS caches.
 
 ## Connect ChatGPT
