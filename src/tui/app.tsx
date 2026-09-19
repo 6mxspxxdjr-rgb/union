@@ -472,6 +472,12 @@ export function App(props: { runtime: UnionRuntime }) {
     }
 
     if (lens() === "room") {
+      if (!roomRunning() && key.shift && key.name === "p") {
+        key.preventDefault()
+        key.stopPropagation()
+        openOverlay("commands")
+        return
+      }
       if (!roomRunning() && (key.name === "[" || key.sequence === "[")) {
         key.preventDefault()
         key.stopPropagation()
@@ -694,7 +700,7 @@ export function App(props: { runtime: UnionRuntime }) {
                     <box flexDirection="column">
                       <text fg="#8b949e">Type one shared task below.</text>
                       <text fg="#6e7681">Union will carry the conversation between the connected agents automatically.</text>
-                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes turns (2–30) · Ctrl+P changes the agent pair.</text>
+                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes turns (2–30) · Shift+P changes the agent pair.</text>
                     </box>
                   }
                 >
