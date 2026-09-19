@@ -374,7 +374,7 @@ export class WorkflowEngine {
   }
 
   private agentPrompt(node: WorkflowNode, packet: ContextPacket, moduleId: string, cycle: number, turn: number) {
-    const include = new Set<ContextContract["include"][number]>([
+    const include = new Set<NonNullable<ContextContract["include"]>[number]>([
       "payload",
       "shared_state",
       "protocol",
