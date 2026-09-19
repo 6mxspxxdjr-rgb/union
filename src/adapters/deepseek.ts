@@ -32,6 +32,11 @@ export class DeepSeekAdapter implements UnionAdapter {
     }))
   }
 
+  async readLatest(endpointId: string): Promise<string> {
+    const data = await this.bridge.request<{ content?: string }>(endpointId, "read_latest")
+    return String(data?.content || "").trim()
+  }
+
   async send(endpointId: string, content: string, submit = false) {
     await this.bridge.request(endpointId, "inject", { content, submit })
   }
