@@ -99,6 +99,7 @@ export interface UnionAdapter {
   capabilities: Capability[]
   discover(): Promise<Endpoint[]>
   read(endpointId: string): Promise<UnionMessage[]>
+  readLatest?(endpointId: string): Promise<string>
   send(endpointId: string, content: string, submit?: boolean): Promise<void>
   interrupt?(endpointId: string): Promise<void>
   dispose?(): Promise<void>
