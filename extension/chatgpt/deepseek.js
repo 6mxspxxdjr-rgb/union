@@ -201,12 +201,45 @@
     return tagged.length ? tagged : fallbackMessages()
   }
 
+  function latestAssistantMessage() {
+    const tagged = [...document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]')]
+    for (let index = tagged.length - 1; index >= 0; index -= 1) {
+      const node = tagged[index]
+      if (node.getAttribute("data-message-author-role") !== "assistant") continue
+      const content = textOf(finalAnswerNode(node))
+      if (content) return { role: "assistant", content, index }
+    }
+
+    const turns = [...document.querySelectorAll(".ds-message, [class*='ds-message']")]
+      .filter((node) =>
+        node.querySelector?.(".ds-assistant-message-main-content, .ds-think-content, .ds-markdown")
+      )
+    const latest = turns.at(-1)
+    const content = textOf(finalAnswerNode(latest))
+    return content
+      ? { role: "assistant", content, index: Math.max(0, turns.length - 1) }
+      : null
+  }
+
   function threadSnapshot() {
     return {
       title: title(),
       url: location.href,
       generating: isGenerating(),
       messages: threadMessages()
+    }
+  }
+
+  // Streaming room updates carry only generation state. The completed latest
+  // answer is sent once when DeepSeek settles. Full history stays on read_thread.
+  function relaySnapshot() {
+    const generating = isGenerating()
+    const latest = generating ? null : latestAssistantMessage()
+    return {
+      title: title(),
+      url: location.href,
+      generating,
+      messages: latest ? [latest] : []
     }
   }
 
@@ -311,16 +344,14 @@
   function scheduleThreadUpdate(delay = 180) {
     clearTimeout(threadTimer)
     threadTimer = setTimeout(() => {
-      const snapshot = threadSnapshot()
+      const snapshot = relaySnapshot()
       const last = snapshot.messages.at(-1)
-      const previous = snapshot.messages.at(-2)
+      const content = last?.content || ""
       const signature = [
         snapshot.generating ? "1" : "0",
-        snapshot.messages.length,
-        previous?.role || "",
-        previous?.content || "",
-        last?.role || "",
-        last?.content || ""
+        last?.index ?? -1,
+        content.length,
+        content.slice(-96)
       ].join("\u001f")
 
       if (signature === lastThreadSignature) return
@@ -334,8 +365,13 @@
 
     ;(async () => {
       if (message.action === "read_latest") {
-        const latest = [...threadMessages()].reverse().find((item) => item.role === "assistant")
-        return { title: title(), content: latest?.content || "", url: location.href }
+        const latest = latestAssistantMessage()
+        return {
+          title: title(),
+          content: latest?.content || "",
+          url: location.href,
+          generating: isGenerating()
+        }
       }
       if (message.action === "read_thread") return threadSnapshot()
       if (message.action === "inject") {
