@@ -268,7 +268,10 @@ export class UnionRuntime {
     for (let index = 0; index < turns; index += 1) {
       const agent = index % 2 === 0 ? first : second
       const partner = index % 2 === 0 ? second : first
-      const before = this.latestAssistantContent(agent.id)
+      // Capture the browser's actual latest answer before sending. This avoids
+      // mistaking an unsynced older reply for the new room response.
+      const before = await this.adapters.readLatest(agent)
+        .catch(() => this.latestAssistantContent(agent.id))
 
       const prompt = index === 0
         ? [
