@@ -65,7 +65,7 @@ export function App(props: { runtime: UnionRuntime }) {
   const [roomTurnLimit, setRoomTurnLimit] = createSignal(4)
   const [roomRunning, setRoomRunning] = createSignal(false)
   const [roomStatus, setRoomStatus] = createSignal("ready")
-  const [notice, setNotice] = createSignal("ready · AI cockpit online")
+  const [notice, setNotice] = createSignal("ready")
   const [capture, setCapture] = createSignal("")
   const [captureSource, setCaptureSource] = createSignal("")
   const [busy, setBusy] = createSignal(false)
@@ -228,7 +228,7 @@ export function App(props: { runtime: UnionRuntime }) {
     chatInput?.blur()
     setLens("subjects")
     setFocus("agents")
-    setNotice("returned to cockpit")
+    setNotice("returned home")
   }
 
   async function submitChat(value: string) {
@@ -374,22 +374,22 @@ export function App(props: { runtime: UnionRuntime }) {
         roomInput?.blur()
         setLens("subjects")
         setFocus("agents")
-        setNotice("returned to cockpit")
+        setNotice("returned home")
       }
       return
     }
 
     if (key.name === "q") renderer.destroy()
-    else if (key.name === "1") { setLens("subjects"); setFocus("subjects") }
-    else if (key.name === "2") { setLens("files"); setFocus("files") }
-    else if (key.name === "3") { setLens("agents"); setFocus("agents") }
-    else if (key.name === "4") { setLens("activity"); setFocus("subjects") }
-    else if (key.name === "5") { setLens("room"); setFocus("agents") }
+    else if (key.name === "h" || key.name === "1") { setLens("subjects"); setFocus("subjects") }
+    else if (key.name === "f" || key.name === "2") { setLens("files"); setFocus("files") }
+    else if (key.name === "s" || key.name === "3") { setLens("agents"); setFocus("agents") }
+    else if (key.name === "a" || key.name === "4") { setLens("activity"); setFocus("subjects") }
+    else if (key.name === "r" || key.name === "5") { setLens("room"); setFocus("agents") }
     else if (key.name === "tab") cycleFocus()
     else if (key.name === "return" && focus() === "agents") void openChat()
     else if (key.name === "j" || key.name === "down") move(1)
     else if (key.name === "k" || key.name === "up") move(-1)
-    else if (key.name === "r") void props.runtime.rescan().then((n) => {
+    else if (key.name === "g") void props.runtime.rescan().then((n) => {
       setNotice(n ? `indexed ${n} files` : "scan already running")
       setTick((v) => v + 1)
     })
@@ -420,22 +420,28 @@ export function App(props: { runtime: UnionRuntime }) {
       >
         <text fg="#f0f6fc">
           <b>UNION</b> <span style={{ fg: "#58a6ff" }}>●</span>
-          <span style={{ fg: "#8b949e" }}> master AI interface · ICM memory layer</span>
+          <span style={{ fg: "#8b949e" }}> AI workspace</span>
         </text>
         <text fg="#6e7681">{props.runtime.root}</text>
       </box>
 
       <box flexGrow={1} flexDirection="row">
-        <Show when={lens() !== "chat"}>
-          <box
+        <box
             width={24}
             flexDirection="column"
             padding={1}
             border={["right"]}
             borderColor={focus() === "subjects" ? "#58a6ff" : "#30363d"}
           >
-            <text fg="#8b949e"><b>SUBJECTS</b></text>
-            <text fg="#6e7681">{subjects().length} indexed</text>
+            <text fg="#8b949e"><b>NAVIGATE</b></text>
+            <text fg={lens() === "subjects" ? "#f0f6fc" : "#6e7681"}>{lens() === "subjects" ? "›" : " "} H  Home</text>
+            <text fg={lens() === "room" ? "#f0f6fc" : "#6e7681"}>{lens() === "room" ? "›" : " "} R  Room</text>
+            <text fg={lens() === "files" ? "#f0f6fc" : "#6e7681"}>{lens() === "files" ? "›" : " "} F  Files</text>
+            <text fg={lens() === "agents" || lens() === "chat" ? "#f0f6fc" : "#6e7681"}>{lens() === "agents" || lens() === "chat" ? "›" : " "} S  Chats</text>
+            <text fg={lens() === "activity" ? "#f0f6fc" : "#6e7681"}>{lens() === "activity" ? "›" : " "} A  Activity</text>
+            <text> </text>
+            <text fg="#8b949e"><b>CONTEXT</b></text>
+            <text fg="#6e7681">{subjects().length} subjects</text>
             <text> </text>
             <For each={subjects().slice(0, 26)}>{(subject, i) => (
               <text fg={i() === subjectIndex() ? "#f0f6fc" : "#8b949e"}>
@@ -446,12 +452,11 @@ export function App(props: { runtime: UnionRuntime }) {
               </text>
             )}</For>
           </box>
-        </Show>
 
         <box flexGrow={1} minWidth={48} flexDirection="column" padding={1} border={["right"]} borderColor="#30363d">
           <Show when={lens() === "subjects"}>
             <text fg="#f0f6fc"><b>{selectedSubject() || "Workspace"}</b></text>
-            <text fg="#6e7681">ACTIVE WORK</text>
+            <text fg="#6e7681">CURRENT WORK</text>
             <text> </text>
 
             <Show when={subjectAgents().length} fallback={<text fg="#6e7681">No live AI work in this subject yet.</text>}>
@@ -468,7 +473,7 @@ export function App(props: { runtime: UnionRuntime }) {
             </Show>
 
             <text> </text>
-            <text fg="#58a6ff"><b>RELATED CONTEXT</b></text>
+            <text fg="#58a6ff"><b>CONTEXT</b></text>
             <Show when={topContextFiles().length} fallback={<text fg="#6e7681">No relevant files indexed yet.</text>}>
               <For each={topContextFiles()}>{(item) => (
                 <text fg="#8b949e">
@@ -505,8 +510,8 @@ export function App(props: { runtime: UnionRuntime }) {
           </Show>
 
           <Show when={lens() === "agents"}>
-            <text fg="#f0f6fc"><b>AI SYSTEM DETAIL</b></text>
-            <text fg="#6e7681">Enter opens terminal chat · o opens browser</text>
+            <text fg="#f0f6fc"><b>CHAT SESSION</b></text>
+            <text fg="#6e7681">Enter chat · o open in browser</text>
             <text> </text>
             <Show when={selectedAgent()} fallback={<text fg="#6e7681">No AI endpoint selected.</text>}>
               {(agent) => (
@@ -518,7 +523,7 @@ export function App(props: { runtime: UnionRuntime }) {
                   <text fg="#8b949e">Updated  {age(agent().updatedAt)} ago</text>
                   <text fg="#8b949e">URL      {(agent().url || "").slice(0, 64)}</text>
                   <text> </text>
-                  <text fg="#58a6ff"><b>ROUTING</b></text>
+                  <text fg="#58a6ff"><b>ACTIONS</b></text>
                   <text fg="#8b949e">Enter  chat with this session</text>
                   <text fg="#8b949e">y      capture latest response</text>
                   <text fg="#8b949e">p      inject current buffer</text>
@@ -542,9 +547,9 @@ export function App(props: { runtime: UnionRuntime }) {
 
           <Show when={lens() === "room"}>
             <box flexDirection="column" flexGrow={1} minHeight={0}>
-              <text fg="#f0f6fc"><b>ROOM 1</b> <span style={{ fg: "#8b949e" }}>two-agent relay</span></text>
+              <text fg="#f0f6fc"><b>ROOM</b> <span style={{ fg: "#8b949e" }}>ChatGPT ↔ DeepSeek</span></text>
               <text fg="#6e7681">
-                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  ↔  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · turns {roomTurnLimit()} · [ / ] adjust · {roomStatus()}
+                {roomChatGPT() ? "● ChatGPT" : "× ChatGPT"}  {roomDeepSeek() ? "● DeepSeek" : "× DeepSeek"} · {roomTurnLimit()} turns · {roomStatus()}
               </text>
               <text> </text>
 
@@ -561,8 +566,8 @@ export function App(props: { runtime: UnionRuntime }) {
                   fallback={
                     <box flexDirection="column">
                       <text fg="#8b949e">Type one shared task below.</text>
-                      <text fg="#6e7681">ChatGPT starts. Union waits for the completed reply, sends it to DeepSeek, then relays DeepSeek back to ChatGPT.</text>
-                      <text fg="#6e7681">Turn limit: {roomTurnLimit()} responses. Press [ or ] to adjust between 2 and 12 before starting.</text>
+                      <text fg="#6e7681">Union will carry the conversation between the connected agents automatically.</text>
+                      <text fg="#6e7681">{roomTurnLimit()} responses · [ or ] changes the turn limit before starting.</text>
                     </box>
                   }
                 >
@@ -575,7 +580,7 @@ export function App(props: { runtime: UnionRuntime }) {
                       borderColor={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}
                     >
                       <text fg={turn.system === "ChatGPT" ? "#58a6ff" : "#a371f7"}>
-                        <b>TURN {turn.index} · {turn.system.toUpperCase()}</b>
+                        <b>{turn.system.toUpperCase()}</b> <span style={{ fg: "#6e7681" }}>turn {turn.index}</span>
                       </text>
                       <text fg="#c9d1d9">{turn.content}</text>
                     </box>
@@ -608,11 +613,11 @@ export function App(props: { runtime: UnionRuntime }) {
           <Show when={lens() === "chat"}>
             <box flexDirection="column" flexGrow={1} minHeight={0}>
               <text fg="#f0f6fc">
-                <b>CHAT</b> <span style={{ fg: "#58a6ff" }}>{chatEndpoint()?.system || "AI"}</span>
-                <span style={{ fg: "#8b949e" }}> · {chatEndpoint()?.title || "No endpoint"}</span>
+                <b>{chatEndpoint()?.title || chatEndpoint()?.system || "Chat"}</b>
+                <span style={{ fg: "#8b949e" }}> · {chatEndpoint()?.system || "AI"}</span>
               </text>
               <text fg="#6e7681">
-                {STATUS[chatEndpoint()?.status || "offline"] || "·"} {STATUS_LABEL[chatEndpoint()?.status || "offline"] || "OFFLINE"} · live browser push
+                {STATUS[chatEndpoint()?.status || "offline"] || "·"} {STATUS_LABEL[chatEndpoint()?.status || "offline"] || "OFFLINE"}
               </text>
               <text> </text>
 
@@ -671,8 +676,8 @@ export function App(props: { runtime: UnionRuntime }) {
           padding={1}
           borderColor={focus() === "agents" ? "#58a6ff" : "#30363d"}
         >
-          <text fg="#f0f6fc"><b>AI SYSTEMS</b> <span style={{ fg: "#58a6ff" }}>{allAgents().length}</span></text>
-          <text fg="#6e7681">live endpoints across all subjects</text>
+          <text fg="#f0f6fc"><b>AGENTS</b> <span style={{ fg: "#58a6ff" }}>{allAgents().length}</span></text>
+          <text fg="#6e7681">connected conversations</text>
           <text> </text>
 
           <Show when={allAgents().length} fallback={<text fg="#6e7681">No endpoints connected. Refresh an open supported AI tab.</text>}>
@@ -688,11 +693,11 @@ export function App(props: { runtime: UnionRuntime }) {
             )}</For>
           </Show>
 
-          <text> </text>
-          <text fg="#58a6ff"><b>BUFFER</b></text>
-          <Show when={capture()} fallback={<text fg="#484f58">empty · y captures AI · c compiles ICM</text>}>
+          <Show when={capture()}>
+            <text> </text>
+            <text fg="#58a6ff"><b>ROUTING BUFFER</b></text>
             <text fg="#8b949e">{captureSource()}</text>
-            <text fg="#484f58">{capture().length} chars ready to route</text>
+            <text fg="#484f58">{capture().length} chars ready</text>
           </Show>
 
           <text> </text>
@@ -714,11 +719,11 @@ export function App(props: { runtime: UnionRuntime }) {
           when={lens() === "chat"}
           fallback={
             <text fg="#6e7681">
-              1 cockpit  2 files  3 systems  4 activity  5 room   tab focus   j/k move   Enter chat   y AI→buffer   c ICM→buffer   p inject   ⇧p submit   o open   q quit
+              H home   R room   F files   S chats   A activity   Tab focus   ↑/↓ move   Enter open   q quit
             </text>
           }
         >
-          <text fg="#6e7681">Enter send · Esc cockpit · Ctrl+C quit · conversation stays in the live browser session</text>
+          <text fg="#6e7681">Enter send · Esc home · Ctrl+C quit</text>
         </Show>
       </box>
     </box>
