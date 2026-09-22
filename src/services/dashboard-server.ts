@@ -23,6 +23,18 @@ type DelegateRequest = {
   timeout_ms?: unknown
   allowBusy?: unknown
   allow_busy?: unknown
+  freshSession?: unknown
+  fresh_session?: unknown
+  spawnIfNeeded?: unknown
+  spawn_if_needed?: unknown
+  source?: unknown
+}
+
+type SpawnRequest = {
+  system?: unknown
+  active?: unknown
+  timeoutMs?: unknown
+  timeout_ms?: unknown
   source?: unknown
 }
 
@@ -119,6 +131,59 @@ export class DashboardServer {
     }
   }
 
+  private normalizeSpawnSystem(value: unknown) {
+    const system = String(value || "").trim().toLowerCase()
+    if (system === "chatgpt" || system === "gpt") return "ChatGPT"
+    if (system === "deepseek") return "DeepSeek"
+    throw new Error("system must be ChatGPT or DeepSeek")
+  }
+
+  private async spawnAgent(body: SpawnRequest) {
+    const system = this.normalizeSpawnSystem(body.system)
+    const active = body.active === true
+    const requestedTimeout = Number(body.timeoutMs ?? body.timeout_ms)
+    const timeoutMs = Number.isFinite(requestedTimeout)
+      ? Math.max(5_000, Math.min(requestedTimeout, 60_000))
+      : 30_000
+    const source = String(body.source || "external").trim().slice(0, 80) || "external"
+    const startedAt = Date.now()
+
+    this.runtime.events.emit(
+      "system",
+      { action: "agent.spawn.started", source, system, active },
+      { subject: "Delegation" },
+    )
+
+    try {
+      const endpoint = await this.runtime.bridge.spawn(system, active, timeoutMs)
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "agent.spawn.completed",
+          source,
+          system,
+          endpointId: endpoint.id,
+          title: endpoint.title,
+          durationMs: Date.now() - startedAt,
+        },
+        { objectId: endpoint.id, subject: endpoint.subject || "Delegation" },
+      )
+      return endpoint
+    } catch (error) {
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "agent.spawn.failed",
+          source,
+          system,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { subject: "Delegation" },
+      )
+      throw error
+    }
+  }
+
   private selectEndpoint(body: DelegateRequest) {
     const endpointId = String(body.endpointId || body.endpoint_id || "").trim()
     const system = String(body.system || "").trim().toLowerCase()
@@ -156,8 +221,39 @@ export class DashboardServer {
       ? Math.max(5_000, Math.min(requestedTimeout, 600_000))
       : 180_000
 
-    const endpoint = this.selectEndpoint(body)
     const source = String(body.source || "external").trim().slice(0, 80) || "external"
+    const freshSession = body.freshSession === true || body.fresh_session === true
+    const spawnIfNeeded = body.spawnIfNeeded === true || body.spawn_if_needed === true
+    const requestedSystem = String(body.system || "").trim()
+
+    let endpoint: Endpoint
+    let spawned = false
+
+    if (freshSession) {
+      if (!requestedSystem) throw new Error("system is required when freshSession=true")
+      endpoint = await this.spawnAgent({
+        system: requestedSystem,
+        active: false,
+        timeoutMs: 30_000,
+        source,
+      })
+      spawned = true
+    } else {
+      try {
+        endpoint = this.selectEndpoint(body)
+      } catch (error) {
+        if (!spawnIfNeeded) throw error
+        if (!requestedSystem) throw new Error("system is required when spawnIfNeeded=true")
+        endpoint = await this.spawnAgent({
+          system: requestedSystem,
+          active: false,
+          timeoutMs: 30_000,
+          source,
+        })
+        spawned = true
+      }
+    }
+
     const startedAt = Date.now()
     this.delegating.add(endpoint.id)
 
@@ -198,6 +294,7 @@ export class DashboardServer {
         endpoint: this.agentView(endpoint),
         response,
         durationMs,
+        spawned,
       }
     } catch (error) {
       this.runtime.events.emit(
@@ -235,6 +332,12 @@ export class DashboardServer {
             .filter((endpoint) => endpoint.status !== "offline")
             .map((endpoint) => this.agentView(endpoint)),
         })
+      }
+
+      if (url.pathname === "/api/agents/spawn" && req.method === "POST") {
+        const body = await this.body(req)
+        const endpoint = await this.spawnAgent(body)
+        return this.json(res, 201, { endpoint: this.agentView(endpoint) })
       }
 
       if (url.pathname === "/api/delegate" && req.method === "POST") {
