@@ -98,6 +98,7 @@ The MCP process is deliberately thin. It uses the same local API that other futu
 \`\`\`text
 GET  /api/health
 GET  /api/agents
+POST /api/agents/spawn
 POST /api/delegate
 \`\`\`
 
@@ -133,3 +134,44 @@ This first pass exposes individual connected agents as compute. The next logical
 - \`stop_run\` — cancel a Union workflow.
 - capability-aware routing — select agents by declared capabilities instead of only provider/title.
 - delegation budgets and queue policy — prevent runaway nested delegation when Hermes and Union workflows can call one another.
+
+
+## Spawn fresh workers
+
+Open a new background ChatGPT worker:
+
+```bash
+curl -X POST http://127.0.0.1:7332/api/agents/spawn \
+  -H 'content-type: application/json' \
+  -d '{"system":"ChatGPT","source":"manual"}'
+```
+
+Open a new DeepSeek worker by changing `system` to `DeepSeek`.
+
+Delegate to a clean, isolated context:
+
+```bash
+curl -X POST http://127.0.0.1:7332/api/delegate \
+  -H 'content-type: application/json' \
+  -d '{
+    "task": "Solve this independently.",
+    "system": "ChatGPT",
+    "freshSession": true,
+    "timeoutMs": 180000,
+    "source": "manual"
+  }'
+```
+
+Use elastic capacity without always opening a tab:
+
+```bash
+curl -X POST http://127.0.0.1:7332/api/delegate \
+  -H 'content-type: application/json' \
+  -d '{
+    "task": "Review this design.",
+    "system": "DeepSeek",
+    "spawnIfNeeded": true,
+    "timeoutMs": 180000,
+    "source": "manual"
+  }'
+```
