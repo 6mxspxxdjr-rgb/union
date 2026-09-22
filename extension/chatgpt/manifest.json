@@ -3,7 +3,7 @@
   "name": "Union AI Browser Bridge",
   "version": "0.0.2",
   "description": "Connect open AI web conversations to the local Union terminal control plane.",
-  "permissions": ["tabs"],
+  "permissions": ["tabs", "scripting"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.deepseek.com/*",
