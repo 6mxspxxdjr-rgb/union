@@ -15,10 +15,14 @@ type DashboardMessage = {
 type DelegateRequest = {
   task?: unknown
   endpointId?: unknown
+  endpoint_id?: unknown
   system?: unknown
   titleContains?: unknown
+  title_contains?: unknown
   timeoutMs?: unknown
+  timeout_ms?: unknown
   allowBusy?: unknown
+  allow_busy?: unknown
   source?: unknown
 }
 
@@ -116,12 +120,12 @@ export class DashboardServer {
   }
 
   private selectEndpoint(body: DelegateRequest) {
-    const endpointId = String(body.endpointId || "").trim()
+    const endpointId = String(body.endpointId || body.endpoint_id || "").trim()
     const system = String(body.system || "").trim().toLowerCase()
-    const titleContains = String(body.titleContains || "").trim().toLowerCase()
-    const allowBusy = body.allowBusy === true
+    const titleContains = String(body.titleContains || body.title_contains || "").trim().toLowerCase()
+    const allowBusy = body.allowBusy === true || body.allow_busy === true
 
-    let candidates = this.runtime.endpoints().filter((endpoint) => endpoint.status !== "offline")
+    let candidates = this.runtime.bridge.list().filter((endpoint) => endpoint.status !== "offline")
     if (endpointId) candidates = candidates.filter((endpoint) => endpoint.id === endpointId)
     if (system) candidates = candidates.filter((endpoint) => endpoint.system.toLowerCase() === system)
     if (titleContains) {
@@ -147,7 +151,7 @@ export class DashboardServer {
     if (!task) throw new Error("task is required")
     if (task.length > 250_000) throw new Error("task is too large")
 
-    const requestedTimeout = Number(body.timeoutMs)
+    const requestedTimeout = Number(body.timeoutMs ?? body.timeout_ms)
     const timeoutMs = Number.isFinite(requestedTimeout)
       ? Math.max(5_000, Math.min(requestedTimeout, 600_000))
       : 180_000
@@ -227,7 +231,9 @@ export class DashboardServer {
 
       if (url.pathname === "/api/agents" && req.method === "GET") {
         return this.json(res, 200, {
-          agents: this.runtime.endpoints().map((endpoint) => this.agentView(endpoint)),
+          agents: this.runtime.bridge.list()
+            .filter((endpoint) => endpoint.status !== "offline")
+            .map((endpoint) => this.agentView(endpoint)),
         })
       }
 
