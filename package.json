@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "bun --watch src/index.tsx",
     "start": "bun src/index.tsx",
+    "mcp:hermes": "bun src/hermes-mcp.ts",
     "check": "bunx tsc --noEmit",
     "test": "bun test"
   },

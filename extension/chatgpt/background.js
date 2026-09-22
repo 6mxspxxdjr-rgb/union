@@ -19,6 +19,37 @@ function endpointRecordForTab(tabId) {
   }
 }
 
+async function rehydrateTabs() {
+  let tabs = []
+  try {
+    tabs = await chrome.tabs.query({
+      url: ["https://chatgpt.com/*", "https://chat.deepseek.com/*"]
+    })
+  } catch {
+    return
+  }
+
+  for (const tab of tabs) {
+    if (!tab.id || !tab.url) continue
+    const file = tab.url.startsWith("https://chat.deepseek.com/")
+      ? "deepseek.js"
+      : tab.url.startsWith("https://chatgpt.com/")
+        ? "content.js"
+        : null
+    if (!file) continue
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: [file]
+      })
+    } catch {
+      // Restricted pages or tabs mid-navigation will be handled by normal
+      // manifest content-script injection once they finish loading.
+    }
+  }
+}
+
 function connect() {
   clearTimeout(reconnectTimer)
   clearInterval(heartbeatTimer)
@@ -33,6 +64,12 @@ function connect() {
   socket.addEventListener("message", (event) => {
     let request
     try { request = JSON.parse(event.data) } catch { return }
+
+    if (request.type === "control.request" && request.requestId) {
+      void handleControlRequest(request)
+      return
+    }
+
     if (request.type !== "request" || !request.requestId || !request.endpointId) return
     void handleRequest(request)
   })
@@ -43,6 +80,45 @@ function connect() {
   })
 
   socket.addEventListener("error", () => socket.close())
+}
+
+async function handleControlRequest(request) {
+  try {
+    if (request.action !== "open_session") {
+      throw new Error(`Unknown browser control action: ${request.action}`)
+    }
+
+    const system = String(request.payload?.system || "").trim().toLowerCase()
+    const url =
+      system === "chatgpt" || system === "gpt"
+        ? "https://chatgpt.com/"
+        : system === "deepseek"
+          ? "https://chat.deepseek.com/"
+          : ""
+
+    if (!url) throw new Error(`Unsupported browser agent system: ${request.payload?.system || ""}`)
+
+    const tab = await chrome.tabs.create({
+      url,
+      active: request.payload?.active === true
+    })
+
+    if (!tab.id) throw new Error("Chrome did not return a tab id")
+
+    send({
+      type: "response",
+      requestId: request.requestId,
+      ok: true,
+      data: { tabId: tab.id, url }
+    })
+  } catch (error) {
+    send({
+      type: "response",
+      requestId: request.requestId,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
 }
 
 async function handleRequest(request) {
@@ -61,11 +137,26 @@ async function handleRequest(request) {
     if (!result?.ok) throw new Error(result?.error || "Browser content adapter failed")
     send({ type: "response", requestId: request.requestId, ok: true, data: result.data })
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+
+    // Chrome keeps tabs alive across extension reloads, but the old content
+    // script instance can disappear. If the background still has a record for
+    // that tab, treat this specific messaging failure as a dead endpoint and
+    // retire it immediately so callers do not repeatedly select a ghost tab.
+    if (/receiving end does not exist|could not establish connection/i.test(message)) {
+      endpoints.delete(request.endpointId)
+      send({
+        type: "endpoint.status",
+        endpointId: request.endpointId,
+        status: "offline"
+      })
+    }
+
     send({
       type: "response",
       requestId: request.requestId,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: message
     })
   }
 }
@@ -122,4 +213,5 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   send({ type: "endpoint.status", endpointId: found.endpointId, status: "offline" })
 })
 
+void rehydrateTabs()
 connect()

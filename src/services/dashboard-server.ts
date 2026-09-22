@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync } from "node:fs"
 import { extname, resolve } from "node:path"
 import { WebSocketServer, WebSocket } from "ws"
+import type { Endpoint } from "../core/types"
 import type { UnionRuntime } from "../core/runtime"
 import type { WorkflowEngine } from "../core/workflow-engine"
 import type { WorkflowDefinition } from "../core/workflow"
@@ -11,12 +12,39 @@ type DashboardMessage = {
   data?: unknown
 }
 
+type DelegateRequest = {
+  task?: unknown
+  endpointId?: unknown
+  endpoint_id?: unknown
+  system?: unknown
+  titleContains?: unknown
+  title_contains?: unknown
+  timeoutMs?: unknown
+  timeout_ms?: unknown
+  allowBusy?: unknown
+  allow_busy?: unknown
+  freshSession?: unknown
+  fresh_session?: unknown
+  spawnIfNeeded?: unknown
+  spawn_if_needed?: unknown
+  source?: unknown
+}
+
+type SpawnRequest = {
+  system?: unknown
+  active?: unknown
+  timeoutMs?: unknown
+  timeout_ms?: unknown
+  source?: unknown
+}
+
 export class DashboardServer {
   private server?: ReturnType<typeof createServer>
   private sockets = new Set<WebSocket>()
   private ws?: WebSocketServer
   private offEvent?: () => void
   private stateTimer?: ReturnType<typeof setInterval>
+  private delegating = new Set<string>()
   private readonly webRoot = resolve(import.meta.dir, "../../web")
 
   constructor(
@@ -60,21 +88,30 @@ export class DashboardServer {
       "system",
       {
         action: "dashboard.started",
-        url: `http://127.0.0.1:${this.port}`,
+        url: "http://127.0.0.1:" + this.port,
       },
       { subject: "Workflows" },
     )
   }
 
+  private agentView(endpoint: Endpoint) {
+    return {
+      id: endpoint.id,
+      adapterId: endpoint.adapterId,
+      system: endpoint.system,
+      title: endpoint.title,
+      subject: endpoint.subject,
+      status: endpoint.status,
+      capabilities: endpoint.capabilities,
+      url: endpoint.url,
+      busy: this.delegating.has(endpoint.id),
+      updatedAt: endpoint.updatedAt,
+    }
+  }
+
   private state() {
     return {
-      endpoints: this.runtime.endpoints().map((endpoint) => ({
-        id: endpoint.id,
-        system: endpoint.system,
-        title: endpoint.title,
-        status: endpoint.status,
-        url: endpoint.url,
-      })),
+      endpoints: this.runtime.endpoints().map((endpoint) => this.agentView(endpoint)),
       runs: this.engine.listRuns().slice(0, 20).map((run) => ({
         id: run.id,
         workflowId: run.workflowId,
@@ -94,8 +131,192 @@ export class DashboardServer {
     }
   }
 
+  private normalizeSpawnSystem(value: unknown) {
+    const system = String(value || "").trim().toLowerCase()
+    if (system === "chatgpt" || system === "gpt") return "ChatGPT"
+    if (system === "deepseek") return "DeepSeek"
+    throw new Error("system must be ChatGPT or DeepSeek")
+  }
+
+  private async spawnAgent(body: SpawnRequest) {
+    const system = this.normalizeSpawnSystem(body.system)
+    const active = body.active === true
+    const requestedTimeout = Number(body.timeoutMs ?? body.timeout_ms)
+    const timeoutMs = Number.isFinite(requestedTimeout)
+      ? Math.max(5_000, Math.min(requestedTimeout, 60_000))
+      : 30_000
+    const source = String(body.source || "external").trim().slice(0, 80) || "external"
+    const startedAt = Date.now()
+
+    this.runtime.events.emit(
+      "system",
+      { action: "agent.spawn.started", source, system, active },
+      { subject: "Delegation" },
+    )
+
+    try {
+      const endpoint = await this.runtime.bridge.spawn(system, active, timeoutMs)
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "agent.spawn.completed",
+          source,
+          system,
+          endpointId: endpoint.id,
+          title: endpoint.title,
+          durationMs: Date.now() - startedAt,
+        },
+        { objectId: endpoint.id, subject: endpoint.subject || "Delegation" },
+      )
+      return endpoint
+    } catch (error) {
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "agent.spawn.failed",
+          source,
+          system,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { subject: "Delegation" },
+      )
+      throw error
+    }
+  }
+
+  private selectEndpoint(body: DelegateRequest) {
+    const endpointId = String(body.endpointId || body.endpoint_id || "").trim()
+    const system = String(body.system || "").trim().toLowerCase()
+    const titleContains = String(body.titleContains || body.title_contains || "").trim().toLowerCase()
+    const allowBusy = body.allowBusy === true || body.allow_busy === true
+
+    let candidates = this.runtime.bridge.list().filter((endpoint) => endpoint.status !== "offline")
+    if (endpointId) candidates = candidates.filter((endpoint) => endpoint.id === endpointId)
+    if (system) candidates = candidates.filter((endpoint) => endpoint.system.toLowerCase() === system)
+    if (titleContains) {
+      candidates = candidates.filter((endpoint) => endpoint.title.toLowerCase().includes(titleContains))
+    }
+
+    if (!candidates.length) {
+      throw new Error("No connected Union endpoint matched the delegation selector")
+    }
+
+    const unlocked = candidates.filter((endpoint) => !this.delegating.has(endpoint.id))
+    if (!unlocked.length) throw new Error("All matching Union endpoints are already handling delegated work")
+
+    const ready = unlocked.find((endpoint) => endpoint.status !== "working")
+    if (ready) return ready
+    if (allowBusy) return unlocked[0]
+
+    throw new Error("All matching Union endpoints report working; retry later or set allowBusy=true")
+  }
+
+  private async delegate(body: DelegateRequest) {
+    const task = String(body.task || "").trim()
+    if (!task) throw new Error("task is required")
+    if (task.length > 250_000) throw new Error("task is too large")
+
+    const requestedTimeout = Number(body.timeoutMs ?? body.timeout_ms)
+    const timeoutMs = Number.isFinite(requestedTimeout)
+      ? Math.max(5_000, Math.min(requestedTimeout, 600_000))
+      : 180_000
+
+    const source = String(body.source || "external").trim().slice(0, 80) || "external"
+    const freshSession = body.freshSession === true || body.fresh_session === true
+    const spawnIfNeeded = body.spawnIfNeeded === true || body.spawn_if_needed === true
+    const requestedSystem = String(body.system || "").trim()
+
+    let endpoint: Endpoint
+    let spawned = false
+
+    if (freshSession) {
+      if (!requestedSystem) throw new Error("system is required when freshSession=true")
+      endpoint = await this.spawnAgent({
+        system: requestedSystem,
+        active: false,
+        timeoutMs: 30_000,
+        source,
+      })
+      spawned = true
+    } else {
+      try {
+        endpoint = this.selectEndpoint(body)
+      } catch (error) {
+        if (!spawnIfNeeded) throw error
+        if (!requestedSystem) throw new Error("system is required when spawnIfNeeded=true")
+        endpoint = await this.spawnAgent({
+          system: requestedSystem,
+          active: false,
+          timeoutMs: 30_000,
+          source,
+        })
+        spawned = true
+      }
+    }
+
+    const startedAt = Date.now()
+    this.delegating.add(endpoint.id)
+
+    this.runtime.events.emit(
+      "system",
+      {
+        action: "delegation.started",
+        source,
+        endpointId: endpoint.id,
+        system: endpoint.system,
+        title: endpoint.title,
+        chars: task.length,
+      },
+      { objectId: endpoint.id, subject: endpoint.subject || "Delegation" },
+    )
+
+    try {
+      const before = await this.runtime.adapters.readLatest(endpoint).catch(() => "")
+      await this.runtime.send(endpoint, task, true, false)
+      const response = await this.runtime.waitForAssistantReply(endpoint, before, timeoutMs)
+      const durationMs = Date.now() - startedAt
+
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "delegation.completed",
+          source,
+          endpointId: endpoint.id,
+          system: endpoint.system,
+          title: endpoint.title,
+          chars: response.length,
+          durationMs,
+        },
+        { objectId: endpoint.id, subject: endpoint.subject || "Delegation" },
+      )
+
+      return {
+        endpoint: this.agentView(endpoint),
+        response,
+        durationMs,
+        spawned,
+      }
+    } catch (error) {
+      this.runtime.events.emit(
+        "system",
+        {
+          action: "delegation.failed",
+          source,
+          endpointId: endpoint.id,
+          system: endpoint.system,
+          title: endpoint.title,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        { objectId: endpoint.id, subject: endpoint.subject || "Delegation" },
+      )
+      throw error
+    } finally {
+      this.delegating.delete(endpoint.id)
+    }
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse) {
-    const url = new URL(req.url || "/", `http://127.0.0.1:${this.port}`)
+    const url = new URL(req.url || "/", "http://127.0.0.1:" + this.port)
     try {
       if (url.pathname === "/api/health") {
         return this.json(res, 200, { ok: true, port: this.port })
@@ -103,6 +324,26 @@ export class DashboardServer {
 
       if (url.pathname === "/api/state" && req.method === "GET") {
         return this.json(res, 200, this.state())
+      }
+
+      if (url.pathname === "/api/agents" && req.method === "GET") {
+        return this.json(res, 200, {
+          agents: this.runtime.bridge.list()
+            .filter((endpoint) => endpoint.status !== "offline")
+            .map((endpoint) => this.agentView(endpoint)),
+        })
+      }
+
+      if (url.pathname === "/api/agents/spawn" && req.method === "POST") {
+        const body = await this.body(req)
+        const endpoint = await this.spawnAgent(body)
+        return this.json(res, 201, { endpoint: this.agentView(endpoint) })
+      }
+
+      if (url.pathname === "/api/delegate" && req.method === "POST") {
+        const body = await this.body(req)
+        const result = await this.delegate(body)
+        return this.json(res, 200, result)
       }
 
       if (url.pathname === "/api/run" && req.method === "POST") {

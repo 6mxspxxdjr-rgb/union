@@ -120,6 +120,27 @@ Each open conversation becomes a Union endpoint.
 
 No ChatGPT credentials are stored by Union. The adapter acts through the already-open browser tab.
 
+
+## Connect Hermes Agent
+
+Union can expose its connected AI endpoints to Hermes as delegated compute through MCP.
+
+Start Union normally, then add the local MCP entrypoint to `~/.hermes/config.yaml` using the absolute path to this repo:
+
+```yaml
+mcp_servers:
+  union:
+    command: "bun"
+    args: ["/ABSOLUTE/PATH/TO/union/src/hermes-mcp.ts"]
+    env:
+      UNION_DASHBOARD_URL: "http://127.0.0.1:7332"
+    timeout: 240
+```
+
+After restarting Hermes, it can list Union-connected agents and delegate a bounded task to one of them, waiting for the settled final response before continuing its own reasoning.
+
+See [`docs/HERMES.md`](docs/HERMES.md) for the full flow, direct API examples, and concurrency behavior.
+
 ## Relay example
 
 Open two ChatGPT conversations. In Union:
@@ -163,7 +184,7 @@ The intention is to reuse proven terminal infrastructure while keeping Union's o
 
 ## Status
 
-**v0 / experimental.** The architecture and first end-to-end ChatGPT relay are implemented, but the project still needs live-terminal testing on the target Mac, adapter hardening against ChatGPT DOM changes, richer file operations, semantic embeddings/model-backed classification, Hermes integration, and a real command palette.
+**v0 / experimental.** The architecture and first end-to-end ChatGPT relay are implemented, but the project still needs live-terminal testing on the target Mac, adapter hardening against ChatGPT DOM changes, richer file operations, semantic embeddings/model-backed classification, deeper Hermes workflow integration, and a real command palette.
 
 ## License
 
