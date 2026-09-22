@@ -1,3 +1,5 @@
+export {}
+
 type JsonRpcId = string | number | null
 
 type JsonRpcRequest = {
