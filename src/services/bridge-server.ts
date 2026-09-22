@@ -115,6 +115,77 @@ export class BridgeServer {
     })
   }
 
+  control<T = unknown>(action: string, payload: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<T> {
+    const client = [...this.clients].find((item) => item.socket.readyState === WebSocket.OPEN)
+    if (!client) return Promise.reject(new Error("No Union browser bridge is connected"))
+
+    const requestId = crypto.randomUUID()
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(requestId)
+        reject(new Error(`Browser control request timed out: ${action}`))
+      }, timeoutMs)
+
+      this.pending.set(requestId, { resolve, reject, timeout })
+      client.socket.send(JSON.stringify({ type: "control.request", requestId, action, payload }))
+    })
+  }
+
+  waitForEndpoint(
+    predicate: (endpoint: Endpoint) => boolean,
+    timeoutMs = 30_000,
+  ): Promise<Endpoint> {
+    const current = [...this.endpoints.values()].find((endpoint) => predicate(endpoint))
+    if (current) return Promise.resolve(current)
+
+    return new Promise<Endpoint>((resolve, reject) => {
+      const handler = (endpoint: Endpoint) => {
+        if (!predicate(endpoint)) return
+        clearTimeout(timeout)
+        this.events.off("endpoint", handler)
+        resolve(endpoint)
+      }
+
+      const timeout = setTimeout(() => {
+        this.events.off("endpoint", handler)
+        reject(new Error("Timed out waiting for spawned browser endpoint to register"))
+      }, timeoutMs)
+
+      this.events.on("endpoint", handler)
+    })
+  }
+
+  async spawn(system: string, active = false, timeoutMs = 30_000) {
+    const normalized = system.trim().toLowerCase()
+    const provider =
+      normalized === "chatgpt" || normalized === "gpt"
+        ? "ChatGPT"
+        : normalized === "deepseek"
+          ? "DeepSeek"
+          : ""
+
+    if (!provider) throw new Error(`Unsupported browser agent system: ${system}`)
+
+    const result = await this.control<{ tabId?: number }>(
+      "open_session",
+      { system: provider, active },
+      Math.min(timeoutMs, 15_000),
+    )
+
+    const tabId = Number(result?.tabId)
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      throw new Error("Browser bridge did not return a valid spawned tab id")
+    }
+
+    return this.waitForEndpoint(
+      (endpoint) =>
+        endpoint.externalId === String(tabId) &&
+        endpoint.system.toLowerCase() === provider.toLowerCase() &&
+        endpoint.status !== "offline",
+      timeoutMs,
+    )
+  }
+
   async close() {
     for (const client of this.clients) client.socket.close()
     await new Promise<void>((resolve) => this.server?.close(() => resolve()))
