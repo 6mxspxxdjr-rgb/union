@@ -1,4 +1,7 @@
 (() => {
+  if (window.__UNION_CHATGPT_BRIDGE__) return
+  window.__UNION_CHATGPT_BRIDGE__ = true
+
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
   function title() {
