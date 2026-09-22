@@ -19,6 +19,37 @@ function endpointRecordForTab(tabId) {
   }
 }
 
+async function rehydrateTabs() {
+  let tabs = []
+  try {
+    tabs = await chrome.tabs.query({
+      url: ["https://chatgpt.com/*", "https://chat.deepseek.com/*"]
+    })
+  } catch {
+    return
+  }
+
+  for (const tab of tabs) {
+    if (!tab.id || !tab.url) continue
+    const file = tab.url.startsWith("https://chat.deepseek.com/")
+      ? "deepseek.js"
+      : tab.url.startsWith("https://chatgpt.com/")
+        ? "content.js"
+        : null
+    if (!file) continue
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: [file]
+      })
+    } catch {
+      // Restricted pages or tabs mid-navigation will be handled by normal
+      // manifest content-script injection once they finish loading.
+    }
+  }
+}
+
 function connect() {
   clearTimeout(reconnectTimer)
   clearInterval(heartbeatTimer)
@@ -137,4 +168,5 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   send({ type: "endpoint.status", endpointId: found.endpointId, status: "offline" })
 })
 
+void rehydrateTabs()
 connect()
