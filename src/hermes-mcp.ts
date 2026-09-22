@@ -31,6 +31,32 @@ const tools = [
     },
   },
   {
+    name: "spawn_agent",
+    description: "Open a fresh browser-backed ChatGPT or DeepSeek session through Union and wait until it registers as a usable endpoint. New tabs stay in the background unless active=true.",
+    inputSchema: {
+      type: "object",
+      required: ["system"],
+      properties: {
+        system: {
+          type: "string",
+          enum: ["ChatGPT", "DeepSeek"],
+          description: "Provider to open in a fresh browser tab.",
+        },
+        active: {
+          type: "boolean",
+          description: "Whether the spawned browser tab should take focus. Defaults to false.",
+        },
+        timeout_ms: {
+          type: "integer",
+          description: "Maximum time to wait for the new tab to register with Union.",
+          minimum: 5000,
+          maximum: 60000,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "delegate",
     description: "Outsource a bounded compute/reasoning subtask to a connected AI endpoint inside Union and wait for that endpoint's settled final response. Select a specific endpoint when identity matters; otherwise Union chooses an available matching endpoint.",
     inputSchema: {
@@ -63,6 +89,14 @@ const tools = [
         allow_busy: {
           type: "boolean",
           description: "Allow dispatch to an endpoint that currently reports working. Defaults to false and should normally stay false.",
+        },
+        fresh_session: {
+          type: "boolean",
+          description: "Open a brand-new session for this delegation instead of reusing an existing endpoint. Requires system=ChatGPT or system=DeepSeek.",
+        },
+        spawn_if_needed: {
+          type: "boolean",
+          description: "If no matching idle endpoint is available, automatically open a fresh session for the requested system and delegate to it.",
         },
       },
       additionalProperties: false,
@@ -141,6 +175,39 @@ async function callTool(name: string, args: Record<string, any>) {
     return toolResult(result, "Union reports " + count + " connected endpoint(s).\n\n" + JSON.stringify(result, null, 2))
   }
 
+  if (name === "spawn_agent") {
+    const system = String(args?.system || "").trim()
+    if (!system) throw new Error("system is required")
+
+    const timeoutMs = Number.isFinite(Number(args?.timeout_ms))
+      ? Math.max(5_000, Math.min(Number(args.timeout_ms), 60_000))
+      : 30_000
+
+    const result = await callUnion(
+      "/api/agents/spawn",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          system,
+          active: args?.active === true,
+          timeoutMs,
+          source: "hermes",
+        }),
+      },
+      timeoutMs + 10_000,
+    )
+
+    const endpoint = result?.endpoint
+    const label = endpoint
+      ? String(endpoint.system || system) + (endpoint.id ? " — " + endpoint.id : "")
+      : system
+
+    return toolResult(
+      result,
+      "Spawned fresh Union agent: " + label,
+    )
+  }
+
   if (name === "delegate") {
     const task = String(args?.task || "").trim()
     if (!task) throw new Error("task is required")
@@ -156,6 +223,8 @@ async function callTool(name: string, args: Record<string, any>) {
       titleContains: args?.title_contains,
       timeoutMs,
       allowBusy: args?.allow_busy === true,
+      freshSession: args?.fresh_session === true,
+      spawnIfNeeded: args?.spawn_if_needed === true,
       source: "hermes",
     }
 
@@ -203,7 +272,7 @@ async function handle(message: JsonRpcRequest) {
           name: "union",
           version: "0.1.0",
         },
-        instructions: "Union exposes connected AI endpoints as delegated compute. Use list_agents to inspect available endpoints, then delegate to outsource bounded reasoning or generation work.",
+        instructions: "Union exposes browser-backed AI endpoints as delegated compute. Use list_agents to inspect available workers, spawn_agent to open fresh ChatGPT or DeepSeek sessions, and delegate to outsource bounded reasoning or generation work. For isolation, use fresh_session. For elastic capacity, use spawn_if_needed with a specific system.",
       })
     }
 
