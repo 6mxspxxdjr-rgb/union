@@ -61,11 +61,26 @@ async function handleRequest(request) {
     if (!result?.ok) throw new Error(result?.error || "Browser content adapter failed")
     send({ type: "response", requestId: request.requestId, ok: true, data: result.data })
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+
+    // Chrome keeps tabs alive across extension reloads, but the old content
+    // script instance can disappear. If the background still has a record for
+    // that tab, treat this specific messaging failure as a dead endpoint and
+    // retire it immediately so callers do not repeatedly select a ghost tab.
+    if (/receiving end does not exist|could not establish connection/i.test(message)) {
+      endpoints.delete(request.endpointId)
+      send({
+        type: "endpoint.status",
+        endpointId: request.endpointId,
+        status: "offline"
+      })
+    }
+
     send({
       type: "response",
       requestId: request.requestId,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: message
     })
   }
 }
