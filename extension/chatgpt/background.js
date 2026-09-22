@@ -64,6 +64,12 @@ function connect() {
   socket.addEventListener("message", (event) => {
     let request
     try { request = JSON.parse(event.data) } catch { return }
+
+    if (request.type === "control.request" && request.requestId) {
+      void handleControlRequest(request)
+      return
+    }
+
     if (request.type !== "request" || !request.requestId || !request.endpointId) return
     void handleRequest(request)
   })
@@ -74,6 +80,45 @@ function connect() {
   })
 
   socket.addEventListener("error", () => socket.close())
+}
+
+async function handleControlRequest(request) {
+  try {
+    if (request.action !== "open_session") {
+      throw new Error(`Unknown browser control action: ${request.action}`)
+    }
+
+    const system = String(request.payload?.system || "").trim().toLowerCase()
+    const url =
+      system === "chatgpt" || system === "gpt"
+        ? "https://chatgpt.com/"
+        : system === "deepseek"
+          ? "https://chat.deepseek.com/"
+          : ""
+
+    if (!url) throw new Error(`Unsupported browser agent system: ${request.payload?.system || ""}`)
+
+    const tab = await chrome.tabs.create({
+      url,
+      active: request.payload?.active === true
+    })
+
+    if (!tab.id) throw new Error("Chrome did not return a tab id")
+
+    send({
+      type: "response",
+      requestId: request.requestId,
+      ok: true,
+      data: { tabId: tab.id, url }
+    })
+  } catch (error) {
+    send({
+      type: "response",
+      requestId: request.requestId,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
 }
 
 async function handleRequest(request) {
